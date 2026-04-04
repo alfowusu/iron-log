@@ -1,5 +1,4 @@
 <!DOCTYPE html>
-
 <html lang="en">
 <head>
   <meta charset="UTF-8"/>
@@ -11,7 +10,6 @@
   <title>Iron Log</title>
 
   <!-- App icon for iPhone home screen -->
-
   <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%230d0d0d'/%3E%3Ctext y='.9em' font-size='72' x='12'%3E🏋️%3C/text%3E%3C/svg%3E"/>
 
   <style>
@@ -23,13 +21,9 @@
   </style>
 
   <!-- React + Babel for JSX in browser -->
-
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
-
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
-
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
-
 </head>
 <body>
   <div id="root"></div>
@@ -223,13 +217,21 @@ function buildStreak(h){
   for(const d of done){const df=Math.round((c-new Date(d))/86400000);if(df<=1){s++;c=new Date(d);}else break;}
   return s;
 }
-function autoSession(h){
-  const recent=Object.keys(h).sort().reverse().slice(0,5).map(d=>h[d]?.sessionKey).filter(Boolean);
-  const rot=["push","pull","legs","push","pull","upper","legs"];
-  const unused=rot.filter(k=>!recent.includes(k));
-  if(unused.length) return SESSIONS.find(s=>s.key===unused[0]);
-  const counts={}; rot.forEach(k=>counts[k]=recent.filter(r=>r===k).length);
-  return SESSIONS.find(s=>s.key===Object.keys(counts).sort((a,b)=>counts[a]-counts[b])[0]);
+function autoSession(h, excludeKey=null){
+  // Core sessions that rotate - PPL is the backbone
+  const pool=["push","pull","legs","upper","shoulders","push","pull","legs","arms","push","pull","legs"];
+  // Get last completed session to avoid repeating it
+  const completedDays=Object.keys(h)
+    .filter(d=>d!==TODAY && h[d]?.status==="done")
+    .sort().reverse();
+  const lastKey=completedDays.length ? h[completedDays[0]]?.sessionKey : null;
+  // Exclude both the last completed session AND the one just cancelled today
+  const avoid=new Set([lastKey, excludeKey].filter(Boolean));
+  const candidates=pool.filter(k=>!avoid.has(k));
+  const finalPool=candidates.length ? candidates : pool;
+  // Pick randomly from valid candidates
+  const pick=finalPool[Math.floor(Math.random()*finalPool.length)];
+  return SESSIONS.find(s=>s.key===pick) || SESSIONS[0];
 }
 function weeklyVol(h){
   const v={}; Object.keys(MUSCLES).forEach(m=>v[m]=0);
@@ -540,10 +542,23 @@ function App(){
   const diff=DIFFICULTY[diffKey];
 
   useEffect(()=>{
+    // Only restore if today has a logged status (done/skipped) or is actively mid-workout
     if(todayRec?.exercises&&todayRec?.sessMeta){
       setExercises(todayRec.exercises);setSessMeta(todayRec.sessMeta);setNotes(todayRec.notes||"");
       setStartTime(todayRec.startTime||null);
-      setWorkPhase(todayRec.status==="done"||todayRec.status==="skipped"?todayRec.isRest?"rest":"done":"workout");
+      if(todayRec.status==="done"||todayRec.status==="skipped"){
+        setWorkPhase(todayRec.isRest?"rest":"done");
+      } else if(todayRec.energy){
+        // Mid-workout: restore workout phase
+        setEnergy(todayRec.energy);
+        setWorkPhase("workout");
+      } else {
+        // No status, no energy logged yet — start fresh
+        setWorkPhase("energy");
+      }
+    } else {
+      // No session today at all — always start at energy check-in
+      setWorkPhase("energy");
     }
   },[]);
 
@@ -575,16 +590,23 @@ function App(){
 
   function handleEnergy(e){
     setEnergy(e);
-    if(e<=2){setWorkPhase("rest");saveH({...history,[TODAY]:{...todayRec,status:"skipped",isRest:true,energy:e}});}
+    // Just navigate - dont save to history yet so user can go back freely
+    if(e<=2){setWorkPhase("rest");}
     else setWorkPhase("pick");
   }
 
   function startSess(s){
-    const recent=Object.keys(history).sort().reverse().slice(0,10).flatMap(d=>(history[d]?.exercises||[]).map(e=>e.id));
+    // Build fresh exercises - exclude recent ones from past sessions only (not today)
+    const pastHistory = Object.keys(history).filter(d=>d!==TODAY).sort().reverse().slice(0,10);
+    const recent=pastHistory.flatMap(d=>(history[d]?.exercises||[]).map(e=>e.id));
     const exs=buildWorkout(s.groups,totalDone,diffKey,phaseKey,locKey,recent);
     const t=Date.now();
-    setExercises(exs);setSessMeta(s);setStartTime(t);
-    saveH({...history,[TODAY]:{...todayRec,sessionKey:s.key,sessMeta:s,exercises:exs,energy,diffKey,phaseKey,locKey,startTime:t}});
+    // Save completely fresh today record - no spreading old todayRec
+    const freshToday={sessionKey:s.key,sessMeta:s,exercises:exs,energy,diffKey,phaseKey,locKey,startTime:t};
+    setExercises(exs);
+    setSessMeta(s);
+    setStartTime(t);
+    saveH({...history,[TODAY]:freshToday});
     setWorkPhase("workout");
   }
 
@@ -611,7 +633,7 @@ function App(){
     setWorkPhase("done");
   }
   function markSkip(){saveH({...history,[TODAY]:{...history[TODAY],status:"skipped",notes}});setWorkPhase("done");}
-  function resetToday(){const n={...history};delete n[TODAY];saveH(n);setExercises([]);setSessMeta(null);setWorkPhase("energy");setNotes("");setStartTime(null);}
+  function resetToday(){const n={...history};delete n[TODAY];saveH(n);setExercises([]);setSessMeta(null);setNotes("");setStartTime(null);setEnergy(null);setWorkPhase("energy");}
 
   const sorted=Object.entries(history).sort(([a],[b])=>b.localeCompare(a)).slice(0,30);
   const TABS=[["today","Today"],["volume","Volume"],["stats","Stats"],["history","Log"]];
@@ -708,6 +730,10 @@ function App(){
           )}
 
           {workPhase==="rest"&&(
+            <div>
+            <button onClick={()=>{setEnergy(null);setWorkPhase("energy");}} style={{display:"flex",alignItems:"center",gap:"8px",background:"rgba(255,255,255,0.07)",border:`1px solid ${C.border}`,borderRadius:"10px",color:C.text,cursor:"pointer",fontSize:"13px",fontWeight:"700",fontFamily:"inherit",marginBottom:"16px",padding:"9px 16px"}}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" width="16" height="16"><polyline points="15 18 9 12 15 6"/></svg> Change energy rating
+            </button>
             <div style={{background:"linear-gradient(135deg,#1a1a2a,#0d0d1a)",border:`1px solid #333`,borderRadius:"16px",padding:"24px",textAlign:"center"}}>
               <div style={{fontSize:"48px",marginBottom:"10px"}}>🌿</div>
               <div style={{fontSize:"18px",fontWeight:"900",color:C.text}}>Rest & Recover</div>
@@ -716,12 +742,19 @@ function App(){
                 <div style={{fontSize:"11px",color:C.green,fontWeight:"700",marginBottom:"6px"}}>🥗 Nutrition Focus</div>
                 <div style={{fontSize:"13px",color:"#bbb",lineHeight:1.6}}>{NUTRITION[totalDone%NUTRITION.length]}</div>
               </div>
+              <button onClick={()=>{saveH({...history,[TODAY]:{status:"skipped",isRest:true,energy}});setWorkPhase("done");setSessMeta({key:"rest",label:"Rest Day",emoji:"🌿",groups:[]});}} style={{width:"100%",marginTop:"16px",padding:"14px",borderRadius:"12px",border:"none",background:"rgba(34,197,94,0.15)",color:C.green,fontWeight:"800",fontSize:"14px",cursor:"pointer",fontFamily:"inherit"}}>
+                ✓ Log as Rest Day
+              </button>
+            </div>
             </div>
           )}
 
           {workPhase==="pick"&&(<>
+            <button onClick={()=>setWorkPhase('energy')} style={{display:'flex',alignItems:'center',gap:'8px',background:'rgba(255,255,255,0.07)',border:`1px solid ${C.border}`,borderRadius:'10px',color:C.text,cursor:'pointer',fontSize:'13px',fontWeight:'700',fontFamily:'inherit',marginBottom:'16px',padding:'9px 16px'}}>
+              <svg viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2.5' width='16' height='16'><polyline points='15 18 9 12 15 6'/></svg> How are you feeling?
+            </button>
             <div style={{fontSize:"17px",fontWeight:"800",marginBottom:"16px"}}>Pick today's session</div>
-            <button onClick={()=>startSess(autoSession(history))} style={{width:"100%",padding:"18px",borderRadius:"16px",border:"none",background:C.accent,color:"#000",fontWeight:"900",fontSize:"15px",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:"10px",marginBottom:"16px",fontFamily:"inherit"}}>
+            <button onClick={()=>{const cancelled=sessMeta?.key||null;startSess(autoSession(history,cancelled));}} style={{width:"100%",padding:"18px",borderRadius:"16px",border:"none",background:C.accent,color:"#000",fontWeight:"900",fontSize:"15px",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:"10px",marginBottom:"16px",fontFamily:"inherit"}}>
               🤖 AI — Optimal Session
               <span style={{fontWeight:"400",fontSize:"12px",opacity:0.65}}>{LOCATIONS[locKey].label} · {diff.label}</span>
             </button>
@@ -739,7 +772,10 @@ function App(){
 
           {workPhase==="workout"&&sessMeta&&(<>
             <div style={{background:"#111",border:`1px solid ${C.border}`,borderRadius:"14px",padding:"16px",marginBottom:"20px"}}>
-              <div style={{fontSize:"10px",color:C.muted,textTransform:"uppercase",letterSpacing:"0.1em",fontFamily:"monospace"}}>Today's Session</div>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"4px"}}>
+                <div style={{fontSize:"10px",color:C.muted,textTransform:"uppercase",letterSpacing:"0.1em",fontFamily:"monospace"}}>Today's Session</div>
+                <button onClick={resetToday} style={{display:"flex",alignItems:"center",gap:"5px",background:"rgba(255,255,255,0.07)",border:`1px solid ${C.border}`,borderRadius:"20px",padding:"5px 12px",cursor:"pointer",fontSize:"12px",color:C.muted,fontFamily:"inherit",fontWeight:"700"}}>↺ Change</button>
+              </div>
               <div style={{fontSize:"20px",fontWeight:"900",color:C.text,marginTop:"4px"}}>{sessMeta.emoji} {sessMeta.label}</div>
               <div style={{display:"flex",gap:"8px",marginTop:"8px",flexWrap:"wrap"}}>
                 <span style={{fontSize:"11px",color:phase.color,fontWeight:"600"}}>{phase.emoji} {phase.label}</span>
@@ -817,6 +853,5 @@ function App(){
 
 ReactDOM.render(<App/>, document.getElementById('root'));
   </script>
-
 </body>
 </html>
