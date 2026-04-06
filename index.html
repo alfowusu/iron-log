@@ -162,6 +162,31 @@ const EX = {
   cr12:{name:"Dragon Flag",          g:"core",equip:"bodyweight", diff:"advanced",    sets:3,reps:"5–8",  w:0,  rest:90, tip:"Rocky's move. Full body tension. Lower slowly.",           video:"https://www.youtube.com/watch?v=njNTKDbdHY4", bw:"cr12",eq:"cr2",pair:"cr5",isPR:false},
 };
 
+// Dedicated full body compound exercises
+const FULLBODY_EX = [
+  {id:"fb1", name:"Barbell Deadlift",        g:"back",  equip:"barbell",    diff:"intermediate",sets:4,reps:"5",    w:135,rest:180,tip:"The king of all exercises. Hinge at hips, brace core, bar drags shins.",         video:"https://www.youtube.com/watch?v=op9kVnSso6Q", bw:"fb6",eq:"fb2", pair:null,isPR:true},
+  {id:"fb2", name:"Romanian Deadlift (DB)",   g:"back",  equip:"dumbbells",  diff:"beginner",    sets:4,reps:"10–12",w:50, rest:90, tip:"Push hips back until deep hamstring stretch. Full body tension.",                 video:"https://www.youtube.com/watch?v=JCXUYuzwNrM", bw:"fb6",eq:"fb1", pair:null,isPR:false},
+  {id:"fb3", name:"Barbell Back Squat",       g:"legs",  equip:"barbell",    diff:"intermediate",sets:4,reps:"6–8", w:115,rest:180,tip:"King of leg exercises. Chest up, depth to parallel, knees track toes.",            video:"https://www.youtube.com/watch?v=ultWZbUMPL8", bw:"fb7",eq:"fb4", pair:null,isPR:true},
+  {id:"fb4", name:"Goblet Squat",             g:"legs",  equip:"dumbbells",  diff:"beginner",    sets:4,reps:"12",  w:50, rest:75, tip:"Hold DB at chest. Great teaching squat. Elbows inside knees at depth.",            video:"https://www.youtube.com/watch?v=MxsFDhcyFyE", bw:"fb7",eq:"fb3", pair:null,isPR:false},
+  {id:"fb5", name:"Barbell Bench Press",      g:"chest", equip:"barbell",    diff:"intermediate",sets:3,reps:"8–10",w:95, rest:90, tip:"Diagonal bar path. Touch lower chest. Drive feet into floor.",                    video:"https://www.youtube.com/watch?v=rT7DgCr-3pg", bw:"fb8",eq:"fb5b",pair:null,isPR:true},
+  {id:"fb5b",name:"DB Bench Press",           g:"chest", equip:"dumbbells",  diff:"beginner",    sets:3,reps:"10–12",w:40,rest:75, tip:"Full stretch at bottom. Dumbbells meet at top.",                                  video:"https://www.youtube.com/watch?v=VmB1G1K7v94", bw:"fb8",eq:"fb5", pair:null,isPR:false},
+  {id:"fb6", name:"Barbell Row",              g:"back",  equip:"barbell",    diff:"intermediate",sets:3,reps:"8–10",w:95, rest:90, tip:"45° torso. Pull to lower chest. Squeeze shoulder blades.",                         video:"https://www.youtube.com/watch?v=FWJR5Ve8bnQ", bw:"fb9",eq:"fb6b",pair:null,isPR:true},
+  {id:"fb6b",name:"Single-Arm DB Row",        g:"back",  equip:"dumbbells",  diff:"beginner",    sets:3,reps:"10ea",w:50, rest:75, tip:"Pull elbow to hip. Full ROM. Brace on bench.",                                     video:"https://www.youtube.com/watch?v=roCP0kZLkpY", bw:"fb9",eq:"fb6", pair:null,isPR:false},
+  {id:"fb7", name:"Bodyweight Squat",         g:"legs",  equip:"bodyweight", diff:"beginner",    sets:4,reps:"20",  w:0,  rest:60, tip:"Sit back into squat. Weight in heels. Full depth.",                               video:"https://www.youtube.com/watch?v=aclHkVaku9U", bw:"fb7",eq:"fb4", pair:null,isPR:false},
+  {id:"fb8", name:"Push-Ups",                 g:"chest", equip:"bodyweight", diff:"beginner",    sets:4,reps:"15–20",w:0, rest:60, tip:"Core tight, chest to floor. Full lockout at top.",                                video:"https://www.youtube.com/watch?v=IODxDxX7oi4", bw:"fb8",eq:"fb5b",pair:null,isPR:false},
+  {id:"fb9", name:"Inverted Row",             g:"back",  equip:"bodyweight", diff:"beginner",    sets:3,reps:"10–15",w:0, rest:75, tip:"Chest to bar. Keep body straight. Pull with elbows.",                             video:"https://www.youtube.com/watch?v=dvkIaarnf0g", bw:"fb9",eq:"fb6b",pair:null,isPR:false},
+  {id:"fb10",name:"Barbell OHP",              g:"shoulders",equip:"barbell", diff:"intermediate",sets:3,reps:"6–8", w:65, rest:120,tip:"Brace core hard. Press overhead in slight arc.",                                  video:"https://www.youtube.com/watch?v=2yjwXTZQDDI", bw:"fb11",eq:"fb10b",pair:null,isPR:true},
+  {id:"fb10b",name:"DB Shoulder Press",       g:"shoulders",equip:"dumbbells",diff:"beginner",   sets:3,reps:"10–12",w:30,rest:75, tip:"Don't arch. Press straight up. Squeeze at top.",                                  video:"https://www.youtube.com/watch?v=qEwKCR5JCog", bw:"fb11",eq:"fb10",pair:null,isPR:false},
+  {id:"fb11",name:"Pike Push-Up",             g:"shoulders",equip:"bodyweight",diff:"beginner",  sets:3,reps:"10–15",w:0, rest:60, tip:"Hips high in inverted V. Lower head toward floor.",                               video:"https://www.youtube.com/watch?v=x7_I5SUAd00", bw:"fb11",eq:"fb10b",pair:null,isPR:false},
+  {id:"fb12",name:"DB Thrusters",             g:"shoulders",equip:"dumbbells",diff:"intermediate",sets:3,reps:"10", w:30, rest:90, tip:"Squat + press in one fluid movement. Full body power.",                           video:"https://www.youtube.com/watch?v=L219gBaW35I", bw:"fb13",eq:"fb12",pair:null,isPR:false},
+  {id:"fb13",name:"Squat to Press (BW)",      g:"legs",  equip:"bodyweight", diff:"beginner",    sets:3,reps:"15",  w:0,  rest:60, tip:"Squat deep, stand and press arms overhead. Full body coordination.",              video:"https://www.youtube.com/watch?v=aclHkVaku9U", bw:"fb13",eq:"fb12",pair:null,isPR:false},
+  {id:"fb14",name:"Hip Thrust",               g:"legs",  equip:"bodyweight", diff:"beginner",    sets:3,reps:"20",  w:0,  rest:45, tip:"Shoulders on bench. Drive hips up. Squeeze glutes hard at top.",                  video:"https://www.youtube.com/watch?v=wPM8icPu6H8", bw:"fb14",eq:"fb14",pair:null,isPR:false},
+  {id:"fb15",name:"Renegade Row",             g:"back",  equip:"dumbbells",  diff:"intermediate",sets:3,reps:"8ea", w:30, rest:90, tip:"Plank position. Row each arm. Keep hips square — no rotation.",                   video:"https://www.youtube.com/watch?v=Zp26q4BY5HE", bw:"fb9",eq:"fb6b",pair:null,isPR:false},
+  {id:"fb16",name:"Push-Up to T-Rotation",    g:"chest", equip:"bodyweight", diff:"intermediate",sets:3,reps:"10",  w:0,  rest:60, tip:"Do a push-up then rotate arm to sky. Core and chest together.",                   video:"https://www.youtube.com/watch?v=PBtPkiLSqLI", bw:"fb8",eq:"fb5b",pair:null,isPR:false},
+  {id:"fb17",name:"Leg Press",                g:"legs",  equip:"machine",    diff:"beginner",    sets:4,reps:"12–15",w:180,rest:90, tip:"Feet shoulder-width. Full depth. Don't lock knees at top.",                      video:"https://www.youtube.com/watch?v=IZxyjW7MPJQ", bw:"fb7",eq:"fb3", pair:null,isPR:false},
+  {id:"fb18",name:"Lat Pulldown",             g:"back",  equip:"cable",      diff:"beginner",    sets:3,reps:"10–12",w:90,rest:75, tip:"Lean slightly back. Pull to upper chest. Feel lats stretch at top.",               video:"https://www.youtube.com/watch?v=CAwf7n6Luuc", bw:"fb9",eq:"fb6b",pair:null,isPR:false},
+];
+
 const ALL_EX = Object.entries(EX).map(([id,ex])=>({...ex,id}));
 const findEx = id => EX[id]?{...EX[id],id}:null;
 const COMPOUND = new Set(["c1","c2","c3","c4","b1","b2","b3","b6","l1","l2","l3","l4","l6","s1","s2","s3","a1","a6","b11","b12","l18"]);
@@ -169,10 +194,59 @@ const shuffle = arr => { const a=[...arr]; for(let i=a.length-1;i>0;i--){const j
 const getW  = () => gs("ig_w5",{});
 const saveW = w  => ss("ig_w5",w);
 
+function buildExercise(ex, totalDone, d, ph, diffKey, isDeload) {
+  const sets=isDeload?Math.max(ex.sets-1,2):ex.sets+d.setsBonus;
+  const reps=isDeload?"10–12 (light)":ph.reps;
+  const rest=`${Math.round(ex.rest*d.restMult)}s`;
+  const stored=getW()[ex.id];
+  const prog=Math.floor(totalDone/4)*(COMPOUND.has(ex.id)?5:2.5);
+  let wt=stored!==undefined?stored:Math.round((ex.w+prog)*d.weightMult/2.5)*2.5;
+  if(isDeload) wt=Math.round(wt*0.6/2.5)*2.5;
+  const tempo=(diffKey==="advanced"&&!isDeload)?d.tempo:"";
+  return {...ex,sets,reps,rest,suggestedWeight:wt,tempo};
+}
+
 function buildWorkout(groups, totalDone, diffKey, phaseKey, locKey, recentIds=[]) {
   const loc=LOCATIONS[locKey]||LOCATIONS.gym, d=DIFFICULTY[diffKey]||DIFFICULTY.beginner;
   const ph=PHASES[phaseKey]||PHASES.hypertrophy, isDeload=phaseKey==="deload";
   const recentSet=new Set(recentIds), result=[], used=new Set();
+
+  // Full body gets its own dedicated compound pool
+  const isFullBody=groups.length>=4;
+  if(isFullBody){
+    const fbPool=shuffle(FULLBODY_EX.filter(ex=>{
+      if(!loc.equip.has(ex.equip)) return false;
+      if(diffKey==="beginner"&&ex.diff!=="beginner") return false;
+      if(diffKey==="intermediate"&&ex.diff==="advanced") return false;
+      return true;
+    }));
+    // Pick one exercise per major group: legs, push(chest/shoulders), pull(back), core
+    const groups_covered={legs:false,chest:false,back:false,shoulders:false};
+    const fresh=fbPool.filter(e=>!recentSet.has(e.id));
+    const fallback=fbPool;
+    const source=[...fresh,...fallback];
+    for(const ex of source){
+      if(result.length>=6) break;
+      if(used.has(ex.id)) continue;
+      const g=ex.g;
+      if(!groups_covered[g]||(result.length<5&&Object.values(groups_covered).filter(Boolean).length>=3)){
+        result.push(buildExercise(ex,totalDone,d,ph,diffKey,isDeload));
+        used.add(ex.id);
+        groups_covered[g]=true;
+      }
+    }
+    // Fill remaining slots if under 5
+    for(const ex of source){
+      if(result.length>=6) break;
+      if(!used.has(ex.id)){
+        result.push(buildExercise(ex,totalDone,d,ph,diffKey,isDeload));
+        used.add(ex.id);
+      }
+    }
+    return result.slice(0,6);
+  }
+
+  // Standard single-group or multi-group workout
   for (const g of groups) {
     const perG=groups.length===1?6:groups.length<=2?3:2;
     const eligible=ALL_EX.filter(ex=>{
@@ -185,23 +259,13 @@ function buildWorkout(groups, totalDone, diffKey, phaseKey, locKey, recentIds=[]
     let count=0;
     for (const ex of pool) {
       if(count>=perG||used.has(ex.id)) continue;
-      const sets=isDeload?Math.max(ex.sets-1,2):ex.sets+d.setsBonus;
-      const reps=isDeload?"10–12 (light)":ph.reps;
-      const rest=`${Math.round(ex.rest*d.restMult)}s`;
-      const wlog=getW(); const stored=wlog[ex.id];
-      const prog=Math.floor(totalDone/4)*(COMPOUND.has(ex.id)?5:2.5);
-      let wt=stored!==undefined?stored:Math.round((ex.w+prog)*d.weightMult/2.5)*2.5;
-      if(isDeload) wt=Math.round(wt*0.6/2.5)*2.5;
-      const tempo=(diffKey==="advanced"&&!isDeload)?d.tempo:"";
-      result.push({...ex,sets,reps,rest,suggestedWeight:wt,tempo});
+      result.push(buildExercise(ex,totalDone,d,ph,diffKey,isDeload));
       used.add(ex.id); count++;
       if(count===1&&ex.pair&&!used.has(ex.pair)&&EX[ex.pair]){
         const pe=EX[ex.pair];
         if(loc.equip.has(pe.equip)){
-          const ps=getW()[ex.pair]; const pp=Math.floor(totalDone/4)*(COMPOUND.has(ex.pair)?5:2.5);
-          let pw=ps!==undefined?ps:Math.round((pe.w+pp)*d.weightMult/2.5)*2.5;
-          if(isDeload) pw=Math.round(pw*0.6/2.5)*2.5;
-          result.push({...pe,id:ex.pair,sets,reps,rest,suggestedWeight:pw,tempo,isSupersetPair:true});
+          const built=buildExercise({...pe,id:ex.pair},totalDone,d,ph,diffKey,isDeload);
+          result.push({...built,isSupersetPair:true});
           used.add(ex.pair); count++;
         }
       }
@@ -281,10 +345,10 @@ const SESSIONS=[
   {key:"back",     label:"Back",       emoji:"🏋️",desc:"Back & Biceps",              groups:["back","arms"]},
   {key:"shoulders",label:"Shoulders",  emoji:"⚡",desc:"Shoulders & Arms",           groups:["shoulders","arms"]},
   {key:"arms",     label:"Arms",       emoji:"💥",desc:"Biceps & Triceps",           groups:["arms"]},
-  {key:"fullbody", label:"Full Body",  emoji:"🌐",desc:"All muscle groups",          groups:["chest","back","legs","shoulders"]},
+  {key:"fullbody", label:"Full Body",  emoji:"🌐",desc:"Compounds — squat, push, pull, hinge",groups:["chest","back","legs","shoulders"]},
 
 ];
-const WARMUPS={push:"2×15 band pull-aparts → arm circles → 2×10 empty bar bench",pull:"Dead hangs ×30s → 2×10 light pulldown → cat-cow ×10",legs:"5 min bike → 2×15 BW squats → leg swings ×20 → hip circles",upper:"Pull-aparts ×20 → 2×10 empty row → 2×10 light bench",chest:"Pull-aparts ×15 → arm circles → 2×10 light DB press",back:"Dead hangs ×30s → 2×10 light pulldown → cat-cow ×10",shoulders:"Light raises ×15 → push-ups ×15 → pull-aparts ×20",arms:"2×15 light curls → 2×15 light pushdown",fullbody:"5 min row → 10 BW squats → 10 push-ups → 10 hip hinges",core:"Dead bugs ×10 → bird dogs ×10ea → hollow hold ×20s"};
+const WARMUPS={push:"2×15 band pull-aparts → arm circles → 2×10 empty bar bench",pull:"Dead hangs ×30s → 2×10 light pulldown → cat-cow ×10",legs:"5 min bike → 2×15 BW squats → leg swings ×20 → hip circles",upper:"Pull-aparts ×20 → 2×10 empty row → 2×10 light bench",chest:"Pull-aparts ×15 → arm circles → 2×10 light DB press",back:"Dead hangs ×30s → 2×10 light pulldown → cat-cow ×10",shoulders:"Light raises ×15 → push-ups ×15 → pull-aparts ×20",arms:"2×15 light curls → 2×15 light pushdown",fullbody:"5 min row or bike → 2×10 BW squats → 10 push-ups → 10 hip hinges → arm circles × 30s → leg swings × 20 each",core:"Dead bugs ×10 → bird dogs ×10ea → hollow hold ×20s"};
 const COOLDOWN="Chest stretch ×45s · Hamstring stretch ×45s ea · Child's pose ×60s · Lat stretch ×30s ea · Deep breathing ×1min";
 
 // Finishers — 1-2 core/conditioning exercises appended to every session
