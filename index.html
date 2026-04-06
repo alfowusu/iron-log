@@ -265,6 +265,10 @@ const daysSince=ds=>!ds?99:Math.round((new Date(TODAY)-new Date(ds))/86400000);
 const heatColor=d=>d===0?"#ef4444":d===1?C.orange:d<=2?C.accent:d<=3?C.green:"#2a2a2a";
 const heatLabel=d=>d===0?"Today":d===1?"Yesterday":d===99?"Not trained":`${d}d ago`;
 const eColors=["","#ef4444","#f97316","#eab308",C.green,C.accent];
+const fmtTime=secs=>{
+  const m=Math.floor(secs/60), s=secs%60;
+  return `${m}:${s.toString().padStart(2,"0")}`;
+};
 const streakMsg=s=>s===0?"Start your streak today 💪":s<4?`${s} day${s>1?"s":""} — build the habit.`:s<7?`${s} days — don't break the chain 🔥`:s===7?"Full week. Built different 🏆":`${s} days. Legendary 🏆`;
 const NUTRITION=["Post-workout: 40g protein within 45 min. Salmon + sweet potato is ideal.","Pre-workout: Brown rice + tuna or oats + Greek yogurt (1–2hr before).","Greek yogurt 0%: 17g protein per cup. Best cheap protein source.","Sardines & mackerel: elite recovery food. Omega-3s cut soreness.","Hydration: bodyweight ÷ 2 = oz of water/day. Add electrolytes on leg days."];
 
@@ -348,7 +352,7 @@ function SubSheet({ex,onSelect,onClose}){
   );
 }
 
-function ExCard({ex,idx,onSwap,plateaued}){
+function ExCard({ex,idx,onSwap,plateaued,lastWeight=null}){
   const [open,setOpen]=useState(false);
   const [showSub,setShowSub]=useState(false);
   const [wt,setWt]=useState(ex.suggestedWeight??ex.w??0);
@@ -382,6 +386,7 @@ function ExCard({ex,idx,onSwap,plateaued}){
                 {ex.w>0&&<span style={{color:C.accent,fontWeight:"800",marginLeft:"8px"}}>@ {wt} lbs</span>}
                 <span style={{color:C.muted,fontSize:"11px",marginLeft:"6px"}}>rest {ex.rest}</span>
               </div>
+              {lastWeight&&lastWeight!==wt&&<div style={{fontSize:"11px",color:C.muted,marginTop:"3px"}}>Last time: {lastWeight} lbs</div>}
               {plateaued&&<div style={{fontSize:"11px",color:C.yellow,marginTop:"5px"}}>⚠️ Plateau — try changing rep range or variation</div>}
             </div>
             <button onClick={()=>setOpen(o=>!o)} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",padding:"4px"}}><IChev o={open}/></button>
@@ -664,9 +669,13 @@ function App(){
   const [nextWts,    setNextWts]    = useState([]);
   const [rebuilding, setRebuilding] = useState(false);
   const [newPRs, setNewPRs] = useState([]);
+  const [elapsed, setElapsed] = useState(0); // seconds
   const [startTime,  setStartTime]  = useState(null);
 
   const todayRec=history[TODAY];
+  const isMonday=new Date().getDay()===1;
+  const weightLoggedThisWeek=(stats.bodyLog||[]).some(e=>e.date>=WEEK_START);
+  const showWeightReminder=isMonday&&!weightLoggedThisWeek;
   const streak=buildStreak(history);
   const totalDone=Object.values(history).filter(d=>d?.status==="done").length;
   const phaseKey=manualPhase||getPhase(totalDone);
@@ -696,6 +705,19 @@ function App(){
 
   const saveH=next=>{setHistory(next);ss("ig_h6",next);};
   const saveS=next=>{setStats(next);ss("ig_s6",next);};
+
+  // Live session timer
+  useEffect(()=>{
+    let interval=null;
+    if(workPhase==="workout"&&startTime){
+      interval=setInterval(()=>{
+        setElapsed(Math.floor((Date.now()-startTime)/1000));
+      },1000);
+    } else {
+      setElapsed(0);
+    }
+    return ()=>clearInterval(interval);
+  },[workPhase,startTime]);
   const savePhase=k=>{
     setManualPhase(k);ss("ig_phase",k);
     const resolvedPhase=k||getPhase(totalDone);
@@ -831,7 +853,6 @@ function App(){
           <div style={{fontSize:"11px",color:C.green,marginBottom:"4px",fontWeight:"700"}}>🥗 Post-Workout Nutrition</div>
           <div style={{fontSize:"13px",color:"#bbb",lineHeight:1.6}}>{NUTRITION[totalDone%NUTRITION.length]}</div>
         </div>
-        <div style={{fontSize:"11px",color:"#444",marginTop:"8px"}}>Tap anywhere to close</div>
       </div>}
 
       {/* HEADER */}
@@ -845,7 +866,7 @@ function App(){
                 {LOCATIONS[locKey].emoji} {LOCATIONS[locKey].label.split(" ")[0]}
               </button>
               <button onClick={()=>setScreen("phase")} style={{display:"flex",alignItems:"center",gap:"4px",background:C.card,border:`1px solid ${phase.color}55`,borderRadius:"20px",padding:"6px 12px",cursor:"pointer",fontSize:"12px",color:phase.color,fontFamily:"inherit",fontWeight:"700"}}>
-                {phase.emoji}{manualPhase?" ✎":""} {phase.label}
+                {phase.emoji} {phase.label}
               </button>
               <button onClick={()=>setScreen("difficulty")} style={{display:"flex",alignItems:"center",gap:"4px",background:C.card,border:`1px solid ${diff.color}55`,borderRadius:"20px",padding:"6px 12px",cursor:"pointer",fontSize:"12px",color:diff.color,fontFamily:"inherit",fontWeight:"700"}}>
                 {diff.emoji} {diff.label}
@@ -863,6 +884,16 @@ function App(){
       <div style={{padding:"0 24px",paddingBottom:"calc(100px + env(safe-area-inset-bottom))"}}>
 
         {tab==="today"&&(<>
+          {/* Monday weight reminder */}
+          {showWeightReminder&&(
+            <div style={{background:"rgba(96,165,250,0.08)",border:"1px solid rgba(96,165,250,0.25)",borderRadius:"14px",padding:"12px 16px",marginBottom:"14px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:"12px"}}>
+              <div>
+                <div style={{fontSize:"13px",fontWeight:"700",color:C.blue,marginBottom:"2px"}}>📊 Monday check-in</div>
+                <div style={{fontSize:"12px",color:C.muted}}>Log your weight to track progress over time.</div>
+              </div>
+              <button onClick={()=>setTab("stats")} style={{flexShrink:0,padding:"8px 14px",borderRadius:"10px",border:"none",background:C.blue,color:"#fff",fontWeight:"800",fontSize:"12px",cursor:"pointer",fontFamily:"inherit"}}>Log it</button>
+            </div>
+          )}
           <div style={{background:`${phase.color}14`,border:`1px solid ${phase.color}33`,borderRadius:"12px",padding:"10px 14px",marginBottom:"14px",display:"flex",alignItems:"center",gap:"10px"}}>
             <span style={{fontSize:"18px"}}>{phase.emoji}</span>
             <div><div style={{fontSize:"12px",fontWeight:"700",color:phase.color}}>{phase.label} Phase{manualPhase?" (manual)":""}</div><div style={{fontSize:"11px",color:C.muted}}>{phase.note}</div></div>
@@ -972,16 +1003,23 @@ function App(){
                 <button onClick={resetToday} style={{display:"flex",alignItems:"center",gap:"5px",background:"rgba(255,255,255,0.07)",border:`1px solid ${C.border}`,borderRadius:"20px",padding:"5px 12px",cursor:"pointer",fontSize:"12px",color:C.muted,fontFamily:"inherit",fontWeight:"700"}}>↺ Change</button>
               </div>
               <div style={{fontSize:"20px",fontWeight:"900",color:C.text,marginTop:"4px"}}>{sessMeta.emoji} {sessMeta.label}</div>
-              <div style={{display:"flex",gap:"8px",marginTop:"8px",flexWrap:"wrap"}}>
+              <div style={{display:"flex",gap:"8px",marginTop:"8px",flexWrap:"wrap",alignItems:"center"}}>
                 <span style={{fontSize:"11px",color:phase.color,fontWeight:"600"}}>{phase.emoji} {phase.label}</span>
                 <span style={{fontSize:"11px",color:diff.color,fontWeight:"600"}}>{diff.emoji} {diff.label}</span>
                 <span style={{fontSize:"11px",color:C.muted}}>{LOCATIONS[locKey].emoji} {LOCATIONS[locKey].label}</span>
+                <span style={{marginLeft:"auto",fontSize:"13px",fontWeight:"800",color:elapsed>3600?C.red:elapsed>2700?C.orange:C.accent,fontFamily:"monospace",letterSpacing:"0.05em"}}>⏱ {fmtTime(elapsed)}</span>
               </div>
             </div>
             <div style={{fontSize:"11px",color:C.muted,textTransform:"uppercase",letterSpacing:"0.1em",fontFamily:"monospace",marginBottom:"8px"}}>Warmup</div>
             <div style={{fontSize:"13px",color:"#999",lineHeight:1.7,marginBottom:"20px"}}>{WARMUPS[sessMeta.key]||WARMUPS.fullbody}</div>
             <div style={{fontSize:"11px",color:C.muted,textTransform:"uppercase",letterSpacing:"0.1em",fontFamily:"monospace",marginBottom:"12px"}}>Exercises · adjust weight · expand for tips & subs</div>
-            {exercises.filter(e=>!e.isFinisher).map((ex,i)=><ExCard key={ex.id+i} ex={ex} idx={i} onSwap={swapEx} plateaued={checkPlateau(history,ex.id)}/>)}
+            {exercises.filter(e=>!e.isFinisher).map((ex,i)=>{
+              // Find last used weight for this exercise from history (excluding today)
+              const lastEntry=Object.keys(history).filter(d=>d!==TODAY&&history[d]?.status==="done").sort().reverse()
+                .map(d=>(history[d]?.exercises||[]).find(e=>e.id===ex.id)).find(e=>e?.suggestedWeight||e?.w);
+              const lastWt=lastEntry?(getW()[ex.id]||lastEntry.suggestedWeight||lastEntry.w):null;
+              return <ExCard key={ex.id+i} ex={ex} idx={i} onSwap={swapEx} plateaued={checkPlateau(history,ex.id)} lastWeight={lastWt}/>;
+            })}
             {exercises.some(e=>e.isFinisher)&&<>
               <div style={{fontSize:"11px",color:C.accent,textTransform:"uppercase",letterSpacing:"0.1em",fontFamily:"monospace",marginTop:"16px",marginBottom:"10px",display:"flex",alignItems:"center",gap:"6px"}}>
                 🔥 Finisher
