@@ -53,11 +53,134 @@ var DIFFICULTY = {
   intermediate: {label:"Intermediate", emoji:"⚡",color:"#e85d26",setsBonus:1, weightMult:1.0, tempo:"",       restMult:1.0},
   advanced:     {label:"Advanced",     emoji:"🔥",color:"#f97316",setsBonus:2, weightMult:1.15,tempo:"3s ecc.",restMult:0.85}
 };
-var PHASES = {
-  hypertrophy:{label:"Hypertrophy",emoji:"💪",color:"#a855f7",reps:"10–15",note:"Moderate weight, pump focus."},
-  strength:   {label:"Strength",    emoji:"🏋️",color:"#60a5fa",reps:"4–6",  note:"Heavy compounds, full recovery."},
-  deload:     {label:"Deload",      emoji:"🌿",color:"#22c55e",reps:"10–12",note:"60% weight, active recovery."}
+// Smart intensity system — replaces rigid phases
+// Reads recent training load and prescribes the right intensity automatically
+var INTENSITY = {
+  high:     {label:"High",     emoji:"💥",color:"#e85d26",reps:"6", weightMult:1.1,  setsBonus:1, note:"You're fresh — push heavy today."},
+  moderate: {label:"Moderate", emoji:"⚡",color:"#e8b426",reps:"10",weightMult:1.0,  setsBonus:0, note:"Solid effort, standard volume."},
+  light:    {label:"Light",    emoji:"🔄",color:"#60a5fa",reps:"14",weightMult:0.85, setsBonus:0, note:"Higher reps, lighter weight — still building."},
+  recovery: {label:"Recovery", emoji:"🌿",color:"#22c55e",reps:"15",weightMult:0.65, setsBonus:-1,note:"Active recovery — move the body, don't destroy it."}
 };
+
+function getIntensity(history, energy) {
+  var now = new Date(TODAY);
+  var todayEnergy = energy || 3;
+
+  // ── 1. COUNT SESSIONS IN LAST 7 DAYS ─────────────────────────────────
+  var last7Days = Object.keys(history).filter(function(d){
+    var diff = Math.round((now - new Date(d)) / 86400000);
+    return diff >= 0 && diff <= 6 && history[d] && history[d].status === "done";
+  }).sort().reverse();
+  var sessionsThisWeek = last7Days.length;
+
+  // ── 2. COUNT CONSECUTIVE TRAINING DAYS ───────────────────────────────
+  var consecutive = 0;
+  var check = new Date(TODAY);
+  for (var i=0; i<14; i++) {
+    var ds = check.toISOString().split("T")[0];
+    if (history[ds] && history[ds].status === "done") {
+      consecutive++;
+      check.setDate(check.getDate() - 1);
+    } else break;
+  }
+
+  // ── 3. DAYS SINCE LAST REST ───────────────────────────────────────────
+  var daysSinceRest = consecutive; // same as consecutive days
+
+  // ── 4. RECENT ENERGY AVERAGE ──────────────────────────────────────────
+  var recentEnergies = last7Days.slice(0,3).map(function(d){
+    return (history[d] && history[d].energy) || 3;
+  });
+  var avgEnergy = recentEnergies.length
+    ? recentEnergies.reduce(function(a,b){return a+b;},0) / recentEnergies.length
+    : 3;
+
+  // ── 5. READ ACTUAL SET PERFORMANCE (THE SMART PART) ──────────────────
+  // Look at the last completed session and see how well sets were done
+  var lastSession = last7Days[0]; // most recent completed session
+  var setPerformance = "neutral"; // crushed / neutral / struggled
+
+  if (lastSession) {
+    var lastExercises = (history[lastSession].exercises || []).filter(function(e){
+      return e.w > 0 && !e.isFinisher;
+    });
+
+    if (lastExercises.length > 0) {
+      var totalPlannedSets = 0;
+      var totalCompletedSets = 0;
+      var totalRepsHit = 0;
+      var totalRepsExpected = 0;
+
+      lastExercises.forEach(function(ex){
+        var savedSets = gs("ig_sets_"+ex.id+"_"+lastSession, null);
+        if (savedSets && savedSets.length) {
+          totalPlannedSets += savedSets.length;
+          var doneSets = savedSets.filter(function(s){ return s.done; });
+          totalCompletedSets += doneSets.length;
+          doneSets.forEach(function(s){
+            var repsLogged = parseInt(s.reps) || 0;
+            var repsTarget = parseInt(ex.reps) || 10;
+            totalRepsHit += repsLogged;
+            totalRepsExpected += repsTarget;
+          });
+        }
+      });
+
+      if (totalPlannedSets > 0) {
+        var completionRate = totalCompletedSets / totalPlannedSets;
+        var repsRate = totalRepsExpected > 0 ? totalRepsHit / totalRepsExpected : 1;
+
+        // Crushed it: completed all sets AND hit or exceeded rep targets
+        if (completionRate >= 0.9 && repsRate >= 0.95) {
+          setPerformance = "crushed";
+        }
+        // Struggled: couldn't complete sets OR fell significantly short on reps
+        else if (completionRate < 0.7 || repsRate < 0.75) {
+          setPerformance = "struggled";
+        }
+        // Otherwise neutral
+      }
+    }
+  }
+
+  // ── 6. COMBINE ALL SIGNALS → PRESCRIBE INTENSITY ─────────────────────
+
+  // Hard overrides first
+  if (todayEnergy <= 2) return "recovery";
+  if (consecutive >= 5 || (consecutive >= 4 && todayEnergy < 4)) return "recovery";
+  if (sessionsThisWeek >= 6) return "recovery";
+
+  // Fatigued signals
+  var fatigue = 0;
+  if (consecutive >= 3) fatigue += 2;
+  else if (consecutive >= 2) fatigue += 1;
+  if (sessionsThisWeek >= 4) fatigue += 1;
+  if (avgEnergy < 3) fatigue += 1;
+  if (todayEnergy <= 3) fatigue += 1;
+  if (setPerformance === "struggled") fatigue += 2; // last session was hard
+  if (setPerformance === "crushed") fatigue -= 1;  // reward good performance
+
+  // Fresh signals
+  var freshness = 0;
+  if (consecutive <= 1) freshness += 2;
+  if (sessionsThisWeek <= 2) freshness += 1;
+  if (todayEnergy >= 4) freshness += 1;
+  if (todayEnergy === 5) freshness += 1;
+  if (setPerformance === "crushed") freshness += 1; // crushed last session, ready for more
+  if (setPerformance === "struggled") freshness -= 1;
+
+  // Net score → intensity
+  var score = freshness - fatigue;
+
+  if (score >= 3) return "high";
+  if (score >= 1) return "moderate";
+  if (score >= -1) return "light";
+  return "recovery";
+}
+
+// Keep PHASES as alias for backward compat with any remaining refs
+var PHASES = INTENSITY;
+function getPhase(total) { return "moderate"; } // fallback, no longer used
 var LOCATIONS = {
   gym:      {label:"Full Gym",      emoji:"🏋️",equip:{"barbell":1,"cable":1,"machine":1,"smith":1,"dumbbells":1,"bodyweight":1,"pullup":1}},
   apartment:{label:"Apartment Gym", emoji:"🏢",equip:{"dumbbells":1,"cable":1,"machine":1,"bodyweight":1,"pullup":1}},
@@ -87,65 +210,65 @@ function getPhase(total){ var p=total%9; return p<4?"hypertrophy":p<8?"strength"
 
 // ── EXERCISES ──────────────────────────────────────────────────────────────
 var EX = {
-  c1: {name:"Barbell Bench Press",  g:"chest",equip:"barbell",   diff:"intermediate",sets:4,reps:"6–8",  w:95, rest:90, tip:"Diagonal bar path. Touch lower chest. Drive heels.",    video:"https://www.youtube.com/watch?v=rT7DgCr-3pg",bw:"c12",eq:"c2", isPR:true},
-  c2: {name:"DB Bench Press",       g:"chest",equip:"dumbbells", diff:"beginner",    sets:4,reps:"10–12",w:40, rest:75, tip:"Full stretch at bottom. Dumbbells meet at top.",         video:"https://www.youtube.com/watch?v=VmB1G1K7v94",bw:"c12",eq:"c1", isPR:false},
-  c3: {name:"Incline BB Press",     g:"chest",equip:"barbell",   diff:"intermediate",sets:3,reps:"8–10", w:75, rest:90, tip:"30–45° only. Higher shifts to shoulders.",              video:"https://www.youtube.com/watch?v=jPLdzuHckI8",bw:"c13",eq:"c4", isPR:false},
-  c4: {name:"Incline DB Press",     g:"chest",equip:"dumbbells", diff:"beginner",    sets:3,reps:"10–12",w:35, rest:75, tip:"Squeeze hard at top of every rep.",                     video:"https://www.youtube.com/watch?v=8iPEnn-ltC8",bw:"c13",eq:"c3", isPR:false},
-  c5: {name:"Smith Machine Press",  g:"chest",equip:"smith",     diff:"beginner",    sets:3,reps:"10–12",w:85, rest:75, tip:"Great for learning the pattern safely.",                video:"https://www.youtube.com/watch?v=Fv4VoKUYHDs",bw:"c12",eq:"c2", isPR:false},
-  c6: {name:"Cable Chest Flye",     g:"chest",equip:"cable",     diff:"beginner",    sets:3,reps:"12–15",w:25, rest:60, tip:"Slight elbow bend. Full squeeze at center.",            video:"https://www.youtube.com/watch?v=Iwe6AmxVf7o",bw:"c14",eq:"c7", isPR:false},
+  c1: {name:"Barbell Bench Press",  g:"chest",equip:"barbell",   diff:"intermediate",sets:4,reps:"6",  w:95, rest:90, tip:"Diagonal bar path. Touch lower chest. Drive heels.",    video:"https://www.youtube.com/watch?v=rT7DgCr-3pg",bw:"c12",eq:"c2", isPR:true},
+  c2: {name:"DB Bench Press",       g:"chest",equip:"dumbbells", diff:"beginner",    sets:4,reps:"10",w:40, rest:75, tip:"Full stretch at bottom. Dumbbells meet at top.",         video:"https://www.youtube.com/watch?v=VmB1G1K7v94",bw:"c12",eq:"c1", isPR:false},
+  c3: {name:"Incline BB Press",     g:"chest",equip:"barbell",   diff:"intermediate",sets:3,reps:"8", w:75, rest:90, tip:"30–45° only. Higher shifts to shoulders.",              video:"https://www.youtube.com/watch?v=jPLdzuHckI8",bw:"c13",eq:"c4", isPR:false},
+  c4: {name:"Incline DB Press",     g:"chest",equip:"dumbbells", diff:"beginner",    sets:3,reps:"10",w:35, rest:75, tip:"Squeeze hard at top of every rep.",                     video:"https://www.youtube.com/watch?v=8iPEnn-ltC8",bw:"c13",eq:"c3", isPR:false},
+  c5: {name:"Smith Machine Press",  g:"chest",equip:"smith",     diff:"beginner",    sets:3,reps:"10",w:85, rest:75, tip:"Great for learning the pattern safely.",                video:"https://www.youtube.com/watch?v=Fv4VoKUYHDs",bw:"c12",eq:"c2", isPR:false},
+  c6: {name:"Cable Chest Flye",     g:"chest",equip:"cable",     diff:"beginner",    sets:3,reps:"12",w:25, rest:60, tip:"Slight elbow bend. Full squeeze at center.",            video:"https://www.youtube.com/watch?v=Iwe6AmxVf7o",bw:"c14",eq:"c7", isPR:false},
   c7: {name:"DB Flye",              g:"chest",equip:"dumbbells", diff:"beginner",    sets:3,reps:"12",   w:25, rest:60, tip:"Wide arc, feel the deep stretch.",                      video:"https://www.youtube.com/watch?v=eozdVDA78K0",bw:"c14",eq:"c6", isPR:false},
-  c8: {name:"Chest Dips",           g:"chest",equip:"bodyweight",diff:"intermediate",sets:3,reps:"8–12", w:0,  rest:75, tip:"Lean forward 30° to target chest over triceps.",        video:"https://www.youtube.com/watch?v=2z8JmcrW-As",bw:"c12",eq:"c2", isPR:false},
+  c8: {name:"Chest Dips",           g:"chest",equip:"bodyweight",diff:"intermediate",sets:3,reps:"10", w:0,  rest:75, tip:"Lean forward 30° to target chest over triceps.",        video:"https://www.youtube.com/watch?v=2z8JmcrW-As",bw:"c12",eq:"c2", isPR:false},
   c9: {name:"Cable Crossover",      g:"chest",equip:"cable",     diff:"intermediate",sets:3,reps:"15",   w:20, rest:60, tip:"High-to-low. Full squeeze at center.",                  video:"https://www.youtube.com/watch?v=taI4XduLpTk",bw:"c14",eq:"c7", isPR:false},
-  c12:{name:"Push-Ups",             g:"chest",equip:"bodyweight",diff:"beginner",    sets:4,reps:"15–20",w:0,  rest:60, tip:"Core tight, chest to floor. Full lockout.",             video:"https://www.youtube.com/watch?v=IODxDxX7oi4",bw:"c12",eq:"c2", isPR:false},
-  c13:{name:"Incline Push-Ups",     g:"chest",equip:"bodyweight",diff:"beginner",    sets:3,reps:"15–20",w:0,  rest:60, tip:"Hands elevated. Upper chest emphasis.",                 video:"https://www.youtube.com/watch?v=cfns5pNQ2lk",bw:"c13",eq:"c4", isPR:false},
+  c12:{name:"Push-Ups",             g:"chest",equip:"bodyweight",diff:"beginner",    sets:4,reps:"15",w:0,  rest:60, tip:"Core tight, chest to floor. Full lockout.",             video:"https://www.youtube.com/watch?v=IODxDxX7oi4",bw:"c12",eq:"c2", isPR:false},
+  c13:{name:"Incline Push-Ups",     g:"chest",equip:"bodyweight",diff:"beginner",    sets:3,reps:"15",w:0,  rest:60, tip:"Hands elevated. Upper chest emphasis.",                 video:"https://www.youtube.com/watch?v=cfns5pNQ2lk",bw:"c13",eq:"c4", isPR:false},
   c14:{name:"Wide Push-Ups",        g:"chest",equip:"bodyweight",diff:"beginner",    sets:3,reps:"15",   w:0,  rest:60, tip:"Wide hands. Flye-like chest stretch.",                  video:"https://www.youtube.com/watch?v=IODxDxX7oi4",bw:"c14",eq:"c7", isPR:false},
-  c15:{name:"Decline Push-Ups",     g:"chest",equip:"bodyweight",diff:"intermediate",sets:3,reps:"12–15",w:0,  rest:60, tip:"Feet elevated. Lower chest and triceps.",              video:"https://www.youtube.com/watch?v=SKPab2s2How",bw:"c15",eq:"c3", isPR:false},
-  b1: {name:"Barbell Deadlift",     g:"back", equip:"barbell",   diff:"intermediate",sets:4,reps:"4–6",  w:135,rest:180,tip:"Bar drags shins. Brace core. Hinge — don't squat.",    video:"https://www.youtube.com/watch?v=op9kVnSso6Q",bw:"b9", eq:"b2", isPR:true},
-  b2: {name:"Romanian Deadlift",    g:"back", equip:"dumbbells", diff:"beginner",    sets:4,reps:"10–12",w:50, rest:90, tip:"Push hips back until deep hamstring stretch.",          video:"https://www.youtube.com/watch?v=JCXUYuzwNrM",bw:"b9", eq:"b1", isPR:false},
-  b3: {name:"Barbell Row",          g:"back", equip:"barbell",   diff:"intermediate",sets:4,reps:"8–10", w:95, rest:90, tip:"45° torso. Pull to lower chest.",                       video:"https://www.youtube.com/watch?v=FWJR5Ve8bnQ",bw:"b9", eq:"b4", isPR:true},
-  b4: {name:"Single-Arm DB Row",    g:"back", equip:"dumbbells", diff:"beginner",    sets:3,reps:"10–12ea",w:50,rest:75,tip:"Pull elbow to hip. Full ROM. Don't rotate.",            video:"https://www.youtube.com/watch?v=roCP0kZLkpY",bw:"b9", eq:"b3", isPR:false},
+  c15:{name:"Decline Push-Ups",     g:"chest",equip:"bodyweight",diff:"intermediate",sets:3,reps:"12",w:0,  rest:60, tip:"Feet elevated. Lower chest and triceps.",              video:"https://www.youtube.com/watch?v=SKPab2s2How",bw:"c15",eq:"c3", isPR:false},
+  b1: {name:"Barbell Deadlift",     g:"back", equip:"barbell",   diff:"intermediate",sets:4,reps:"5",  w:135,rest:180,tip:"Bar drags shins. Brace core. Hinge — don't squat.",    video:"https://www.youtube.com/watch?v=op9kVnSso6Q",bw:"b9", eq:"b2", isPR:true},
+  b2: {name:"Romanian Deadlift",    g:"back", equip:"dumbbells", diff:"beginner",    sets:4,reps:"10",w:50, rest:90, tip:"Push hips back until deep hamstring stretch.",          video:"https://www.youtube.com/watch?v=JCXUYuzwNrM",bw:"b9", eq:"b1", isPR:false},
+  b3: {name:"Barbell Row",          g:"back", equip:"barbell",   diff:"intermediate",sets:4,reps:"8", w:95, rest:90, tip:"45° torso. Pull to lower chest.",                       video:"https://www.youtube.com/watch?v=FWJR5Ve8bnQ",bw:"b9", eq:"b4", isPR:true},
+  b4: {name:"Single-Arm DB Row",    g:"back", equip:"dumbbells", diff:"beginner",    sets:3,reps:"10ea",w:50,rest:75,tip:"Pull elbow to hip. Full ROM. Don't rotate.",            video:"https://www.youtube.com/watch?v=roCP0kZLkpY",bw:"b9", eq:"b3", isPR:false},
   b5: {name:"Cable Seated Row",     g:"back", equip:"cable",     diff:"beginner",    sets:3,reps:"12",   w:80, rest:75, tip:"Chest up. Pull to stomach. 1 sec hold.",                video:"https://www.youtube.com/watch?v=GZbfZ033f74",bw:"b9", eq:"b4", isPR:false},
-  b6: {name:"Lat Pulldown",         g:"back", equip:"cable",     diff:"beginner",    sets:4,reps:"10–12",w:90, rest:75, tip:"Lean back slightly, pull to upper chest.",              video:"https://www.youtube.com/watch?v=CAwf7n6Luuc",bw:"b7", eq:"b7", isPR:false},
-  b7: {name:"Pull-Ups",             g:"back", equip:"pullup",    diff:"intermediate",sets:3,reps:"6–10", w:0,  rest:90, tip:"Dead hang start. Chin clears bar.",                     video:"https://www.youtube.com/watch?v=eGo4IYlbE5g",bw:"b7", eq:"b6", isPR:false},
-  b9: {name:"Inverted Row",         g:"back", equip:"bodyweight",diff:"beginner",    sets:3,reps:"10–15",w:0,  rest:75, tip:"Chest to bar. Body straight as a plank.",               video:"https://www.youtube.com/watch?v=dvkIaarnf0g",bw:"b9", eq:"b5", isPR:false},
+  b6: {name:"Lat Pulldown",         g:"back", equip:"cable",     diff:"beginner",    sets:4,reps:"10",w:90, rest:75, tip:"Lean back slightly, pull to upper chest.",              video:"https://www.youtube.com/watch?v=CAwf7n6Luuc",bw:"b7", eq:"b7", isPR:false},
+  b7: {name:"Pull-Ups",             g:"back", equip:"pullup",    diff:"intermediate",sets:3,reps:"8", w:0,  rest:90, tip:"Dead hang start. Chin clears bar.",                     video:"https://www.youtube.com/watch?v=eGo4IYlbE5g",bw:"b7", eq:"b6", isPR:false},
+  b9: {name:"Inverted Row",         g:"back", equip:"bodyweight",diff:"beginner",    sets:3,reps:"12",w:0,  rest:75, tip:"Chest to bar. Body straight as a plank.",               video:"https://www.youtube.com/watch?v=dvkIaarnf0g",bw:"b9", eq:"b5", isPR:false},
   b13:{name:"Face Pulls",           g:"back", equip:"cable",     diff:"beginner",    sets:3,reps:"15",   w:35, rest:45, tip:"Pull to face. Elbows high. Shoulder health essential.", video:"https://www.youtube.com/watch?v=rep-qVOkqgk",bw:"b9", eq:"b4", isPR:false},
-  l1: {name:"Barbell Back Squat",   g:"legs", equip:"barbell",   diff:"intermediate",sets:4,reps:"6–8",  w:115,rest:180,tip:"Chest up, knees track toes. Thighs parallel.",          video:"https://www.youtube.com/watch?v=ultWZbUMPL8",bw:"l12",eq:"l3", isPR:true},
+  l1: {name:"Barbell Back Squat",   g:"legs", equip:"barbell",   diff:"intermediate",sets:4,reps:"6",  w:115,rest:180,tip:"Chest up, knees track toes. Thighs parallel.",          video:"https://www.youtube.com/watch?v=ultWZbUMPL8",bw:"l12",eq:"l3", isPR:true},
   l2: {name:"Goblet Squat",         g:"legs", equip:"dumbbells", diff:"beginner",    sets:4,reps:"12",   w:50, rest:75, tip:"Hold DB at chest. Elbows inside knees.",                video:"https://www.youtube.com/watch?v=MxsFDhcyFyE",bw:"l12",eq:"l1", isPR:false},
-  l3: {name:"Smith Machine Squat",  g:"legs", equip:"smith",     diff:"beginner",    sets:4,reps:"10–12",w:95, rest:90, tip:"Feet slightly forward. Controlled descent.",            video:"https://www.youtube.com/watch?v=cKPLGcNuXRk",bw:"l12",eq:"l1", isPR:false},
-  l4: {name:"Leg Press",            g:"legs", equip:"machine",   diff:"beginner",    sets:4,reps:"12–15",w:180,rest:90, tip:"Feet shoulder-width. Don't lock knees.",                video:"https://www.youtube.com/watch?v=IZxyjW7MPJQ",bw:"l12",eq:"l1", isPR:false},
-  l6: {name:"Barbell RDL",          g:"legs", equip:"barbell",   diff:"intermediate",sets:3,reps:"8–10", w:95, rest:90, tip:"Hinge, bar drags legs. Deep hamstring stretch.",        video:"https://www.youtube.com/watch?v=JCXUYuzwNrM",bw:"l14",eq:"b2", isPR:false},
-  l7: {name:"Lying Leg Curl",       g:"legs", equip:"machine",   diff:"beginner",    sets:3,reps:"12–15",w:60, rest:60, tip:"Full stretch. Pull heel to glute. Squeeze hard.",       video:"https://www.youtube.com/watch?v=1Tq3QdYUuHs",bw:"l14",eq:"l6", isPR:false},
+  l3: {name:"Smith Machine Squat",  g:"legs", equip:"smith",     diff:"beginner",    sets:4,reps:"10",w:95, rest:90, tip:"Feet slightly forward. Controlled descent.",            video:"https://www.youtube.com/watch?v=cKPLGcNuXRk",bw:"l12",eq:"l1", isPR:false},
+  l4: {name:"Leg Press",            g:"legs", equip:"machine",   diff:"beginner",    sets:4,reps:"12",w:180,rest:90, tip:"Feet shoulder-width. Don't lock knees.",                video:"https://www.youtube.com/watch?v=IZxyjW7MPJQ",bw:"l12",eq:"l1", isPR:false},
+  l6: {name:"Barbell RDL",          g:"legs", equip:"barbell",   diff:"intermediate",sets:3,reps:"8", w:95, rest:90, tip:"Hinge, bar drags legs. Deep hamstring stretch.",        video:"https://www.youtube.com/watch?v=JCXUYuzwNrM",bw:"l14",eq:"b2", isPR:false},
+  l7: {name:"Lying Leg Curl",       g:"legs", equip:"machine",   diff:"beginner",    sets:3,reps:"12",w:60, rest:60, tip:"Full stretch. Pull heel to glute. Squeeze hard.",       video:"https://www.youtube.com/watch?v=1Tq3QdYUuHs",bw:"l14",eq:"l6", isPR:false},
   l8: {name:"Walking Lunges",       g:"legs", equip:"dumbbells", diff:"beginner",    sets:3,reps:"12ea", w:30, rest:75, tip:"Long stride. Back knee hovers above floor.",            video:"https://www.youtube.com/watch?v=L8fvypPrzzs",bw:"l13",eq:"l9", isPR:false},
-  l10:{name:"Standing Calf Raise",  g:"legs", equip:"machine",   diff:"beginner",    sets:4,reps:"15–20",w:90, rest:45, tip:"Full stretch at bottom. Full squeeze at top.",          video:"https://www.youtube.com/watch?v=-M4-G8p1fCI",bw:"l16",eq:"l11",isPR:false},
+  l10:{name:"Standing Calf Raise",  g:"legs", equip:"machine",   diff:"beginner",    sets:4,reps:"15",w:90, rest:45, tip:"Full stretch at bottom. Full squeeze at top.",          video:"https://www.youtube.com/watch?v=-M4-G8p1fCI",bw:"l16",eq:"l11",isPR:false},
   l12:{name:"Bodyweight Squat",     g:"legs", equip:"bodyweight",diff:"beginner",    sets:4,reps:"20",   w:0,  rest:60, tip:"Sit back into squat. Weight in heels.",                 video:"https://www.youtube.com/watch?v=aclHkVaku9U",bw:"l12",eq:"l2", isPR:false},
   l13:{name:"Reverse Lunge (BW)",   g:"legs", equip:"bodyweight",diff:"beginner",    sets:3,reps:"15ea", w:0,  rest:60, tip:"Step back. Front knee stays over ankle.",               video:"https://www.youtube.com/watch?v=xrjTDyqaHtE",bw:"l13",eq:"l8", isPR:false},
-  l14:{name:"Nordic Curl",          g:"legs", equip:"bodyweight",diff:"advanced",    sets:3,reps:"5–8",  w:0,  rest:90, tip:"Best hamstring exercise. Anchor feet. Lower slowly.",   video:"https://www.youtube.com/watch?v=d8PSdFP1G6o",bw:"l14",eq:"l7", isPR:false},
+  l14:{name:"Nordic Curl",          g:"legs", equip:"bodyweight",diff:"advanced",    sets:3,reps:"6",  w:0,  rest:90, tip:"Best hamstring exercise. Anchor feet. Lower slowly.",   video:"https://www.youtube.com/watch?v=d8PSdFP1G6o",bw:"l14",eq:"l7", isPR:false},
   l16:{name:"Calf Raises (BW)",     g:"legs", equip:"bodyweight",diff:"beginner",    sets:4,reps:"25",   w:0,  rest:30, tip:"Use stairs for extra range. Full ROM.",                 video:"https://www.youtube.com/watch?v=-M4-G8p1fCI",bw:"l16",eq:"l10",isPR:false},
-  l18:{name:"Hip Thrust (BB)",      g:"legs", equip:"barbell",   diff:"intermediate",sets:4,reps:"10–12",w:95, rest:75, tip:"Shoulders on bench. Drive hips up. Squeeze glutes.",    video:"https://www.youtube.com/watch?v=xDmFkJxPzeM",bw:"l19",eq:"l19",isPR:false},
+  l18:{name:"Hip Thrust (BB)",      g:"legs", equip:"barbell",   diff:"intermediate",sets:4,reps:"10",w:95, rest:75, tip:"Shoulders on bench. Drive hips up. Squeeze glutes.",    video:"https://www.youtube.com/watch?v=xDmFkJxPzeM",bw:"l19",eq:"l19",isPR:false},
   l19:{name:"Glute Bridge",         g:"legs", equip:"bodyweight",diff:"beginner",    sets:3,reps:"20",   w:0,  rest:45, tip:"Drive through heels. Squeeze glutes at top.",           video:"https://www.youtube.com/watch?v=wPM8icPu6H8",bw:"l19",eq:"l18",isPR:false},
   l17:{name:"Leg Extension",        g:"legs", equip:"machine",   diff:"beginner",    sets:3,reps:"15",   w:70, rest:60, tip:"Squeeze quad at top. Slow on the way down.",            video:"https://www.youtube.com/watch?v=YyvSfVjQeL0",bw:"l12",eq:"l4", isPR:false},
-  s1: {name:"Barbell OHP",          g:"shoulders",equip:"barbell",  diff:"intermediate",sets:4,reps:"6–8",  w:65, rest:120,tip:"Brace core. Press in slight arc. Don't flare elbows.",video:"https://www.youtube.com/watch?v=2yjwXTZQDDI",bw:"s10",eq:"s2", isPR:true},
-  s2: {name:"DB Shoulder Press",    g:"shoulders",equip:"dumbbells",diff:"beginner",    sets:4,reps:"10–12",w:30, rest:75, tip:"Don't arch. Press straight up.",                      video:"https://www.youtube.com/watch?v=qEwKCR5JCog",bw:"s10",eq:"s1", isPR:false},
+  s1: {name:"Barbell OHP",          g:"shoulders",equip:"barbell",  diff:"intermediate",sets:4,reps:"6",  w:65, rest:120,tip:"Brace core. Press in slight arc. Don't flare elbows.",video:"https://www.youtube.com/watch?v=2yjwXTZQDDI",bw:"s10",eq:"s2", isPR:true},
+  s2: {name:"DB Shoulder Press",    g:"shoulders",equip:"dumbbells",diff:"beginner",    sets:4,reps:"10",w:30, rest:75, tip:"Don't arch. Press straight up.",                      video:"https://www.youtube.com/watch?v=qEwKCR5JCog",bw:"s10",eq:"s1", isPR:false},
   s4: {name:"DB Lateral Raise",     g:"shoulders",equip:"dumbbells",diff:"beginner",    sets:4,reps:"15",   w:15, rest:45, tip:"Lead with elbows. Slight lean. Don't shrug.",         video:"https://www.youtube.com/watch?v=3VcKaXpzqRo",bw:"s13",eq:"s5", isPR:false},
   s5: {name:"Cable Lateral Raise",  g:"shoulders",equip:"cable",    diff:"beginner",    sets:3,reps:"15",   w:10, rest:45, tip:"Constant tension vs dumbbells.",                      video:"https://www.youtube.com/watch?v=PPDMbgcGLgQ",bw:"s13",eq:"s4", isPR:false},
   s6: {name:"Rear Delt Flye",       g:"shoulders",equip:"dumbbells",diff:"beginner",    sets:3,reps:"15",   w:15, rest:45, tip:"Hinge over, arms wide — feel rear delts.",            video:"https://www.youtube.com/watch?v=EA7u4Q_8HQ0",bw:"s13",eq:"b13",isPR:false},
-  s7: {name:"Arnold Press",         g:"shoulders",equip:"dumbbells",diff:"intermediate",sets:3,reps:"10–12",w:25, rest:75, tip:"Rotate palms as you press. Hits all 3 delt heads.",    video:"https://www.youtube.com/watch?v=6Z15_WdXmVw",bw:"s10",eq:"s2", isPR:false},
-  s10:{name:"Pike Push-Up",         g:"shoulders",equip:"bodyweight",diff:"beginner",   sets:3,reps:"10–15",w:0,  rest:60, tip:"Hips high. Lower head toward floor.",                 video:"https://www.youtube.com/watch?v=x7_I5SUAd00",bw:"s10",eq:"s2", isPR:false},
+  s7: {name:"Arnold Press",         g:"shoulders",equip:"dumbbells",diff:"intermediate",sets:3,reps:"10",w:25, rest:75, tip:"Rotate palms as you press. Hits all 3 delt heads.",    video:"https://www.youtube.com/watch?v=6Z15_WdXmVw",bw:"s10",eq:"s2", isPR:false},
+  s10:{name:"Pike Push-Up",         g:"shoulders",equip:"bodyweight",diff:"beginner",   sets:3,reps:"12",w:0,  rest:60, tip:"Hips high. Lower head toward floor.",                 video:"https://www.youtube.com/watch?v=x7_I5SUAd00",bw:"s10",eq:"s2", isPR:false},
   s13:{name:"Rear Delt Band Pull",  g:"shoulders",equip:"bodyweight",diff:"beginner",   sets:3,reps:"20",   w:0,  rest:45, tip:"Pull band apart at chest height.",                    video:"https://www.youtube.com/watch?v=EA7u4Q_8HQ0",bw:"s13",eq:"s6", isPR:false},
-  a1: {name:"Barbell Curl",         g:"arms",equip:"barbell",   diff:"intermediate",sets:4,reps:"8–10", w:55, rest:60, tip:"No swinging. Elbows pinned at sides.",                   video:"https://www.youtube.com/watch?v=kwG2ipFRgfo",bw:"a11",eq:"a2", isPR:true},
-  a2: {name:"DB Curl",              g:"arms",equip:"dumbbells", diff:"beginner",    sets:3,reps:"10–12",w:25, rest:60, tip:"Supinate at top for full contraction.",                  video:"https://www.youtube.com/watch?v=ykJmrZ5v0Oo",bw:"a11",eq:"a1", isPR:false},
-  a3: {name:"Cable Curl",           g:"arms",equip:"cable",     diff:"beginner",    sets:3,reps:"12–15",w:40, rest:60, tip:"Constant tension. Great finisher.",                      video:"https://www.youtube.com/watch?v=NFzTWp2qpiE",bw:"a11",eq:"a1", isPR:false},
+  a1: {name:"Barbell Curl",         g:"arms",equip:"barbell",   diff:"intermediate",sets:4,reps:"8", w:55, rest:60, tip:"No swinging. Elbows pinned at sides.",                   video:"https://www.youtube.com/watch?v=kwG2ipFRgfo",bw:"a11",eq:"a2", isPR:true},
+  a2: {name:"DB Curl",              g:"arms",equip:"dumbbells", diff:"beginner",    sets:3,reps:"10",w:25, rest:60, tip:"Supinate at top for full contraction.",                  video:"https://www.youtube.com/watch?v=ykJmrZ5v0Oo",bw:"a11",eq:"a1", isPR:false},
+  a3: {name:"Cable Curl",           g:"arms",equip:"cable",     diff:"beginner",    sets:3,reps:"12",w:40, rest:60, tip:"Constant tension. Great finisher.",                      video:"https://www.youtube.com/watch?v=NFzTWp2qpiE",bw:"a11",eq:"a1", isPR:false},
   a4: {name:"Hammer Curl",          g:"arms",equip:"dumbbells", diff:"beginner",    sets:3,reps:"12",   w:25, rest:60, tip:"Neutral grip adds forearm thickness.",                   video:"https://www.youtube.com/watch?v=zC3nLlEvin4",bw:"a11",eq:"a2", isPR:false},
-  a6: {name:"Skull Crushers",       g:"arms",equip:"barbell",   diff:"intermediate",sets:4,reps:"10–12",w:45, rest:75, tip:"Elbows up. Lower to forehead. Slow eccentric.",          video:"https://www.youtube.com/watch?v=d_KZxkY_0cM",bw:"a12",eq:"a7", isPR:false},
-  a7: {name:"Cable Pushdown",       g:"arms",equip:"cable",     diff:"beginner",    sets:3,reps:"12–15",w:45, rest:60, tip:"Lock elbows at sides. Full extension.",                  video:"https://www.youtube.com/watch?v=2-LAMcpzODU",bw:"a12",eq:"a6", isPR:false},
+  a6: {name:"Skull Crushers",       g:"arms",equip:"barbell",   diff:"intermediate",sets:4,reps:"10",w:45, rest:75, tip:"Elbows up. Lower to forehead. Slow eccentric.",          video:"https://www.youtube.com/watch?v=d_KZxkY_0cM",bw:"a12",eq:"a7", isPR:false},
+  a7: {name:"Cable Pushdown",       g:"arms",equip:"cable",     diff:"beginner",    sets:3,reps:"12",w:45, rest:60, tip:"Lock elbows at sides. Full extension.",                  video:"https://www.youtube.com/watch?v=2-LAMcpzODU",bw:"a12",eq:"a6", isPR:false},
   a8: {name:"Overhead Tricep Ext.", g:"arms",equip:"dumbbells", diff:"beginner",    sets:3,reps:"12",   w:30, rest:60, tip:"Long head stretch. Elbows stay forward.",                video:"https://www.youtube.com/watch?v=YbX7Wd8jQ-Q",bw:"a12",eq:"a7", isPR:false},
-  a10:{name:"Tricep Dips",          g:"arms",equip:"bodyweight",diff:"intermediate",sets:3,reps:"10–15",w:0,  rest:75, tip:"Stay upright to target triceps.",                        video:"https://www.youtube.com/watch?v=6kALZikXxLc",bw:"a10",eq:"a6", isPR:false},
-  a11:{name:"Chin-Ups",             g:"arms",equip:"pullup",    diff:"intermediate",sets:3,reps:"6–10", w:0,  rest:90, tip:"Underhand grip hits biceps harder than pull-ups.",       video:"https://www.youtube.com/watch?v=brhRXlOhsAM",bw:"a11",eq:"a3", isPR:false},
-  a12:{name:"Diamond Push-Ups",     g:"arms",equip:"bodyweight",diff:"beginner",    sets:3,reps:"10–15",w:0,  rest:60, tip:"Hands form diamond. Elbows tight.",                     video:"https://www.youtube.com/watch?v=J0DnG1_S92I",bw:"a12",eq:"a7", isPR:false},
-  cr4:{name:"Plank",                g:"core",equip:"bodyweight",diff:"beginner",    sets:3,reps:"45–60s",w:0, rest:45, tip:"Squeeze everything. Hips level. Breathe.",              video:"https://www.youtube.com/watch?v=pvIjsG5Svdk",bw:"cr4",eq:"cr4",isPR:false},
+  a10:{name:"Tricep Dips",          g:"arms",equip:"bodyweight",diff:"intermediate",sets:3,reps:"12",w:0,  rest:75, tip:"Stay upright to target triceps.",                        video:"https://www.youtube.com/watch?v=6kALZikXxLc",bw:"a10",eq:"a6", isPR:false},
+  a11:{name:"Chin-Ups",             g:"arms",equip:"pullup",    diff:"intermediate",sets:3,reps:"8", w:0,  rest:90, tip:"Underhand grip hits biceps harder than pull-ups.",       video:"https://www.youtube.com/watch?v=brhRXlOhsAM",bw:"a11",eq:"a3", isPR:false},
+  a12:{name:"Diamond Push-Ups",     g:"arms",equip:"bodyweight",diff:"beginner",    sets:3,reps:"12",w:0,  rest:60, tip:"Hands form diamond. Elbows tight.",                     video:"https://www.youtube.com/watch?v=J0DnG1_S92I",bw:"a12",eq:"a7", isPR:false},
+  cr4:{name:"Plank",                g:"core",equip:"bodyweight",diff:"beginner",    sets:3,reps:"45s",w:0, rest:45, tip:"Squeeze everything. Hips level. Breathe.",timed:45,              video:"https://www.youtube.com/watch?v=pvIjsG5Svdk",bw:"cr4",eq:"cr4",isPR:false},
   cr5:{name:"Leg Raises",           g:"core",equip:"bodyweight",diff:"beginner",    sets:3,reps:"15",   w:0,  rest:45, tip:"Lower slowly — resist the drop.",                       video:"https://www.youtube.com/watch?v=JB2oyawG9KI",bw:"cr5",eq:"cr5",isPR:false},
   cr8:{name:"Bicycle Crunches",     g:"core",equip:"bodyweight",diff:"beginner",    sets:3,reps:"20",   w:0,  rest:45, tip:"Full rotation. Slow and controlled.",                   video:"https://www.youtube.com/watch?v=9FGilxCbdz8",bw:"cr8",eq:"cr8",isPR:false},
-  cr10:{name:"Mountain Climbers",   g:"core",equip:"bodyweight",diff:"beginner",    sets:3,reps:"40s",  w:0,  rest:30, tip:"Hips level. Fast feet.",                                video:"https://www.youtube.com/watch?v=nmwgirgXLYM",bw:"cr10",eq:"cr10",isPR:false}
+  cr10:{name:"Mountain Climbers",   g:"core",equip:"bodyweight",diff:"beginner",    sets:3,reps:"40s",  w:0,  rest:30, tip:"Hips level. Fast feet.",timed:40,                                video:"https://www.youtube.com/watch?v=nmwgirgXLYM",bw:"cr10",eq:"cr10",isPR:false}
 };
 
 var ALL_EX = Object.keys(EX).map(function(id){ return Object.assign({},EX[id],{id:id}); });
@@ -157,19 +280,19 @@ function shuffle(arr){ var a=arr.slice(); for(var i=a.length-1;i>0;i--){ var j=M
 // ── FULLBODY POOL ──────────────────────────────────────────────────────────
 var FULLBODY_EX = [
   {id:"fb1", name:"Barbell Deadlift",      g:"back",     equip:"barbell",   diff:"intermediate",sets:4,reps:"5",    w:135,rest:180,tip:"King of exercises. Hinge at hips, bar drags shins.",     video:"https://www.youtube.com/watch?v=op9kVnSso6Q",bw:"fb7",eq:"fb2",isPR:true},
-  {id:"fb2", name:"Romanian Deadlift (DB)",g:"back",     equip:"dumbbells", diff:"beginner",    sets:4,reps:"10–12",w:50, rest:90, tip:"Push hips back. Full hamstring stretch.",               video:"https://www.youtube.com/watch?v=JCXUYuzwNrM",bw:"fb7",eq:"fb1",isPR:false},
-  {id:"fb3", name:"Barbell Back Squat",    g:"legs",     equip:"barbell",   diff:"intermediate",sets:4,reps:"6–8", w:115,rest:180,tip:"Chest up, depth to parallel, knees track toes.",        video:"https://www.youtube.com/watch?v=ultWZbUMPL8",bw:"fb6",eq:"fb4",isPR:true},
+  {id:"fb2", name:"Romanian Deadlift (DB)",g:"back",     equip:"dumbbells", diff:"beginner",    sets:4,reps:"10",w:50, rest:90, tip:"Push hips back. Full hamstring stretch.",               video:"https://www.youtube.com/watch?v=JCXUYuzwNrM",bw:"fb7",eq:"fb1",isPR:false},
+  {id:"fb3", name:"Barbell Back Squat",    g:"legs",     equip:"barbell",   diff:"intermediate",sets:4,reps:"6", w:115,rest:180,tip:"Chest up, depth to parallel, knees track toes.",        video:"https://www.youtube.com/watch?v=ultWZbUMPL8",bw:"fb6",eq:"fb4",isPR:true},
   {id:"fb4", name:"Goblet Squat",          g:"legs",     equip:"dumbbells", diff:"beginner",    sets:4,reps:"12",  w:50, rest:75, tip:"Hold DB at chest. Elbows inside knees at depth.",       video:"https://www.youtube.com/watch?v=MxsFDhcyFyE",bw:"fb6",eq:"fb3",isPR:false},
-  {id:"fb5", name:"DB Bench Press",        g:"chest",    equip:"dumbbells", diff:"beginner",    sets:3,reps:"10–12",w:40,rest:75, tip:"Full stretch at bottom. Dumbbells meet at top.",         video:"https://www.youtube.com/watch?v=VmB1G1K7v94",bw:"fb8",eq:"fb5",isPR:false},
-  {id:"fb5b",name:"Barbell Bench Press",   g:"chest",    equip:"barbell",   diff:"intermediate",sets:3,reps:"8–10",w:95, rest:90, tip:"Diagonal bar path. Touch lower chest.",                 video:"https://www.youtube.com/watch?v=rT7DgCr-3pg",bw:"fb8",eq:"fb5",isPR:true},
+  {id:"fb5", name:"DB Bench Press",        g:"chest",    equip:"dumbbells", diff:"beginner",    sets:3,reps:"10",w:40,rest:75, tip:"Full stretch at bottom. Dumbbells meet at top.",         video:"https://www.youtube.com/watch?v=VmB1G1K7v94",bw:"fb8",eq:"fb5",isPR:false},
+  {id:"fb5b",name:"Barbell Bench Press",   g:"chest",    equip:"barbell",   diff:"intermediate",sets:3,reps:"8",w:95, rest:90, tip:"Diagonal bar path. Touch lower chest.",                 video:"https://www.youtube.com/watch?v=rT7DgCr-3pg",bw:"fb8",eq:"fb5",isPR:true},
   {id:"fb6", name:"Bodyweight Squat",      g:"legs",     equip:"bodyweight",diff:"beginner",    sets:4,reps:"20",  w:0,  rest:60, tip:"Sit back. Weight in heels. Full depth.",                video:"https://www.youtube.com/watch?v=aclHkVaku9U",bw:"fb6",eq:"fb4",isPR:false},
-  {id:"fb7", name:"Inverted Row",          g:"back",     equip:"bodyweight",diff:"beginner",    sets:3,reps:"10–15",w:0, rest:75, tip:"Chest to bar. Body straight. Pull with elbows.",        video:"https://www.youtube.com/watch?v=dvkIaarnf0g",bw:"fb7",eq:"fb2",isPR:false},
-  {id:"fb8", name:"Push-Ups",              g:"chest",    equip:"bodyweight",diff:"beginner",    sets:4,reps:"15–20",w:0, rest:60, tip:"Core tight, chest to floor. Full lockout.",             video:"https://www.youtube.com/watch?v=IODxDxX7oi4",bw:"fb8",eq:"fb5",isPR:false},
-  {id:"fb9", name:"Barbell Row",           g:"back",     equip:"barbell",   diff:"intermediate",sets:3,reps:"8–10",w:95, rest:90, tip:"45° torso. Pull to lower chest. Squeeze.",              video:"https://www.youtube.com/watch?v=FWJR5Ve8bnQ",bw:"fb7",eq:"fb2",isPR:true},
-  {id:"fb10",name:"DB Shoulder Press",     g:"shoulders",equip:"dumbbells", diff:"beginner",    sets:3,reps:"10–12",w:30,rest:75, tip:"Don't arch. Press straight up.",                        video:"https://www.youtube.com/watch?v=qEwKCR5JCog",bw:"fb11",eq:"fb10",isPR:false},
-  {id:"fb11",name:"Pike Push-Up",          g:"shoulders",equip:"bodyweight",diff:"beginner",    sets:3,reps:"10–15",w:0, rest:60, tip:"Hips high. Lower head toward floor.",                  video:"https://www.youtube.com/watch?v=x7_I5SUAd00",bw:"fb11",eq:"fb10",isPR:false},
-  {id:"fb12",name:"Leg Press",             g:"legs",     equip:"machine",   diff:"beginner",    sets:4,reps:"12–15",w:180,rest:90,tip:"Feet shoulder-width. Full depth.",                      video:"https://www.youtube.com/watch?v=IZxyjW7MPJQ",bw:"fb6",eq:"fb3",isPR:false},
-  {id:"fb13",name:"Lat Pulldown",          g:"back",     equip:"cable",     diff:"beginner",    sets:3,reps:"10–12",w:90,rest:75, tip:"Lean slightly back. Pull to upper chest.",              video:"https://www.youtube.com/watch?v=CAwf7n6Luuc",bw:"fb7",eq:"fb2",isPR:false},
+  {id:"fb7", name:"Inverted Row",          g:"back",     equip:"bodyweight",diff:"beginner",    sets:3,reps:"12",w:0, rest:75, tip:"Chest to bar. Body straight. Pull with elbows.",        video:"https://www.youtube.com/watch?v=dvkIaarnf0g",bw:"fb7",eq:"fb2",isPR:false},
+  {id:"fb8", name:"Push-Ups",              g:"chest",    equip:"bodyweight",diff:"beginner",    sets:4,reps:"15",w:0, rest:60, tip:"Core tight, chest to floor. Full lockout.",             video:"https://www.youtube.com/watch?v=IODxDxX7oi4",bw:"fb8",eq:"fb5",isPR:false},
+  {id:"fb9", name:"Barbell Row",           g:"back",     equip:"barbell",   diff:"intermediate",sets:3,reps:"8",w:95, rest:90, tip:"45° torso. Pull to lower chest. Squeeze.",              video:"https://www.youtube.com/watch?v=FWJR5Ve8bnQ",bw:"fb7",eq:"fb2",isPR:true},
+  {id:"fb10",name:"DB Shoulder Press",     g:"shoulders",equip:"dumbbells", diff:"beginner",    sets:3,reps:"10",w:30,rest:75, tip:"Don't arch. Press straight up.",                        video:"https://www.youtube.com/watch?v=qEwKCR5JCog",bw:"fb11",eq:"fb10",isPR:false},
+  {id:"fb11",name:"Pike Push-Up",          g:"shoulders",equip:"bodyweight",diff:"beginner",    sets:3,reps:"12",w:0, rest:60, tip:"Hips high. Lower head toward floor.",                  video:"https://www.youtube.com/watch?v=x7_I5SUAd00",bw:"fb11",eq:"fb10",isPR:false},
+  {id:"fb12",name:"Leg Press",             g:"legs",     equip:"machine",   diff:"beginner",    sets:4,reps:"12",w:180,rest:90,tip:"Feet shoulder-width. Full depth.",                      video:"https://www.youtube.com/watch?v=IZxyjW7MPJQ",bw:"fb6",eq:"fb3",isPR:false},
+  {id:"fb13",name:"Lat Pulldown",          g:"back",     equip:"cable",     diff:"beginner",    sets:3,reps:"10",w:90,rest:75, tip:"Lean slightly back. Pull to upper chest.",              video:"https://www.youtube.com/watch?v=CAwf7n6Luuc",bw:"fb7",eq:"fb2",isPR:false},
   {id:"fb14",name:"Glute Bridge",          g:"legs",     equip:"bodyweight",diff:"beginner",    sets:3,reps:"20",  w:0,  rest:45, tip:"Drive through heels. Squeeze glutes at top.",          video:"https://www.youtube.com/watch?v=wPM8icPu6H8",bw:"fb14",eq:"fb14",isPR:false},
   {id:"fb15",name:"Single-Arm DB Row",     g:"back",     equip:"dumbbells", diff:"beginner",    sets:3,reps:"10ea",w:50, rest:75, tip:"Pull elbow to hip. Full ROM.",                          video:"https://www.youtube.com/watch?v=roCP0kZLkpY",bw:"fb7",eq:"fb15",isPR:false}
 ];
@@ -203,50 +326,108 @@ var SESSIONS = [
   {key:"arms",     label:"Arms",       emoji:"💥",desc:"Biceps & Triceps",           groups:["arms"]},
   {key:"fullbody", label:"Full Body",  emoji:"🌐",desc:"Compounds — squat, push, pull, hinge",groups:["chest","back","legs","shoulders"]}
 ];
-var WARMUPS = {
-  push:"2×15 band pull-aparts → arm circles → 2×10 empty bar bench",
-  pull:"Dead hangs ×30s → 2×10 light pulldown → cat-cow ×10",
-  legs:"5 min bike → 2×15 BW squats → leg swings ×20 → hip circles",
-  upper:"Pull-aparts ×20 → 2×10 empty row → 2×10 light bench",
-  chest:"Pull-aparts ×15 → arm circles → 2×10 light DB press",
-  back:"Dead hangs ×30s → 2×10 light pulldown → cat-cow ×10",
-  shoulders:"Light raises ×15 → push-ups ×15 → pull-aparts ×20",
-  arms:"2×15 light curls → 2×15 light pushdown",
-  fullbody:"5 min row → 10 BW squats → 10 push-ups → 10 hip hinges → leg swings ×20"
-};
-var COOLDOWN = "Chest stretch ×45s · Hamstring stretch ×45s ea · Child's pose ×60s · Lat stretch ×30s ea";
+// Smart warmup — cardio with target zones, ~10 min
+function getWarmup(sessionKey, diffKey, locKey, offset) {
+  offset = offset || 0;
+  var isHome = locKey === "home";
+  var seed = new Date().getHours() + new Date().getDate();
+
+  var gymWarmups = {
+    beginner: [
+      "10 min treadmill @ 3–4 mph / 0–1% incline",
+      "10 min treadmill @ 3.5–4.5 mph / 0% incline",
+      "10 min bike, easy-moderate resistance",
+      "10 min treadmill @ 3.5–4 mph / 2–4% incline",
+      "5 min treadmill @ 3.5–4 mph + 5 min bike easy"
+    ],
+    intermediate: [
+      "10 min treadmill @ 5.5–6.5 mph / 0–1% incline",
+      "10 min treadmill @ 6–7 mph / 0% incline",
+      "5 min treadmill @ 6–7 mph + 5 min bike moderate",
+      "10 min treadmill @ 5–6 mph / 4–6% incline",
+      "10 min row machine, steady pace",
+      "10 min bike, moderate-high resistance"
+    ],
+    advanced: [
+      "10 min treadmill @ 7–8 mph / 0–1% incline",
+      "10 min treadmill @ 7.5–8.5 mph / 0% incline",
+      "5 min treadmill @ 6.5–7.5 mph then 5 min @ 8–9 mph",
+      "10 min treadmill @ 5.5–6.5 mph / 12–15% incline",
+      "10 min treadmill @ 6–7 mph / 8–10% incline",
+      "5 min treadmill @ 7.5–8.5 mph + 5 min row machine",
+      "10 min treadmill @ 7–8 mph / 1–2% incline"
+    ]
+  };
+
+  var homeWarmups = {
+    beginner: [
+      "10 min brisk walk outside",
+      "5 min jumping jacks + 5 min marching in place",
+      "10 min light jog on the spot",
+      "5 min step-touches + 5 min arm swings"
+    ],
+    intermediate: [
+      "10 min jog outside at a comfortable pace",
+      "5 min jumping jacks + 3 min high knees + 2 min butt kicks",
+      "10 min alternating 1 min jumping jacks / 1 min high knees",
+      "5 min shadow boxing + 5 min jumping jacks"
+    ],
+    advanced: [
+      "10 min run outside, push the pace",
+      "3 min burpees + 3 min jump squats + 4 min high knees",
+      "10 min alternating 30s burpees / 30s jumping jacks",
+      "5 min burpees + 5 min shadow boxing",
+      "4 min burpees + 3 min jump squats + 3 min mountain climbers"
+    ]
+  };
+
+  var diff = diffKey || "beginner";
+  var pool = isHome ? (homeWarmups[diff]||homeWarmups.beginner) : (gymWarmups[diff]||gymWarmups.beginner);
+  return pool[(seed + offset) % pool.length];
+}
+var COOLDOWN = "Get your protein in within 45 min — that matters more than stretching. Shake, chicken, eggs, tuna, yogurt — whatever works. Drink water.";
 var NUTRITION = [
-  "Post-workout: 40g protein within 45 min. Salmon + sweet potato is ideal.",
-  "Pre-workout: Brown rice + tuna or oats + Greek yogurt (1–2hr before).",
-  "Greek yogurt 0%: 17g protein per cup. Best cheap protein source.",
-  "Sardines & mackerel: elite recovery food. Omega-3s cut soreness.",
-  "Hydration: bodyweight ÷ 2 = oz of water/day. Add electrolytes on leg days."
+  "Post-workout: 40g protein within 45 min. Chicken, beef, fish, eggs or a shake all work.",
+  "Pre-workout: Complex carbs + protein 1–2hr before. Rice + chicken, oats + eggs, bread + tuna.",
+  "Greek yogurt 0%: 17g protein per cup. Fast, cheap, easy. Add fruit or honey.",
+  "Eggs: 6g protein each, full amino acid profile. Scrambled, boiled, any way works.",
+  "Hydration: bodyweight (lbs) ÷ 2 = oz of water per day. Add electrolytes on leg days.",
+  "Beef, chicken, turkey, fish — all great sources. Mix it up to avoid meal fatigue.",
+  "Recovery meal: lean protein + starchy carb within 2hrs. Keeps muscle breakdown low.",
+  "Cottage cheese before bed: slow-digesting casein protein. Feeds muscle overnight.",
+  "Whole milk: 8g protein per cup, calories for bulking. Skim for cutting.",
+  "Tuna cans: 25g protein, almost zero fat. Cheapest quality protein available."
 ];
 
 // ── WORKOUT BUILDER ────────────────────────────────────────────────────────
-function buildExercise(ex, totalDone, d, ph, diffKey, isDeload, genderKey) {
+function buildExercise(ex, totalDone, d, intensity, diffKey, genderKey) {
   var gc = GENDER_CONFIG[genderKey];
-  var sets = isDeload ? Math.max(ex.sets-1,2) : ex.sets + d.setsBonus;
-  var reps = isDeload ? "10–12 (light)" : ph.reps;
-  if (gc && gc.repBonus > 0 && !isDeload) {
-    reps = reps.replace(/\d+/g, function(n){ return String(parseInt(n)+gc.repBonus); });
-  }
+  var inten = INTENSITY[intensity] || INTENSITY.moderate;
+  var isRecovery = intensity === "recovery";
+
+  // Sets: difficulty bonus + intensity modifier
+  var sets = Math.max(2, ex.sets + d.setsBonus + inten.setsBonus);
+
+  // Reps: intensity drives the rep target, gender adds a small bonus
+  var baseReps = parseInt(inten.reps) || 10;
+  if (gc && gc.repBonus > 0) baseReps += Math.round(gc.repBonus * 0.5);
+  var reps = String(baseReps) + (isRecovery ? " (easy)" : "");
+
   var rest = Math.round(ex.rest * d.restMult) + "s";
   var stored = getW()[ex.id];
   var prog = Math.floor(totalDone/4) * (COMPOUND[ex.id] ? 5 : 2.5);
-  var wt = stored !== undefined ? stored : Math.round((ex.w+prog)*d.weightMult/2.5)*2.5;
-  if (isDeload) wt = Math.round(wt*0.6/2.5)*2.5;
-  var tempo = (diffKey==="advanced" && !isDeload) ? d.tempo : "";
+  var baseWt = stored !== undefined ? stored : Math.round((ex.w+prog)*d.weightMult/2.5)*2.5;
+  // Apply intensity weight multiplier
+  var wt = Math.round(baseWt * inten.weightMult / 2.5) * 2.5;
+  var tempo = (diffKey==="advanced" && !isRecovery) ? d.tempo : "";
   return Object.assign({}, ex, {sets:sets, reps:reps, rest:rest, suggestedWeight:wt, tempo:tempo});
 }
 
-function buildWorkout(groups, totalDone, diffKey, phaseKey, locKey, recentIds, durationMins, genderKey) {
+function buildWorkout(groups, totalDone, diffKey, intensityKey, locKey, recentIds, durationMins, genderKey) {
   recentIds = recentIds || [];
   durationMins = durationMins || 60;
   var loc = LOCATIONS[locKey] || LOCATIONS.gym;
   var d = DIFFICULTY[diffKey] || DIFFICULTY.beginner;
-  var ph = PHASES[phaseKey] || PHASES.hypertrophy;
-  var isDeload = phaseKey === "deload";
   var recentSet = {};
   recentIds.forEach(function(id){ recentSet[id]=1; });
   var result = [], used = {};
@@ -265,7 +446,7 @@ function buildWorkout(groups, totalDone, diffKey, phaseKey, locKey, recentIds, d
       var fex = fbPool[fi];
       if (used[fex.id]) continue;
       if (!covered[fex.g] || result.length < dc.exercises-1) {
-        result.push(buildExercise(fex, totalDone, d, ph, diffKey, isDeload, genderKey));
+        result.push(buildExercise(fex, totalDone, d, intensityKey, diffKey, genderKey));
         used[fex.id] = 1;
         covered[fex.g] = true;
       }
@@ -273,7 +454,7 @@ function buildWorkout(groups, totalDone, diffKey, phaseKey, locKey, recentIds, d
     for (var fj=0; fj<fbPool.length && result.length<dc.exercises; fj++) {
       var fex2 = fbPool[fj];
       if (!used[fex2.id]) {
-        result.push(buildExercise(fex2, totalDone, d, ph, diffKey, isDeload, genderKey));
+        result.push(buildExercise(fex2, totalDone, d, intensityKey, diffKey, genderKey));
         used[fex2.id] = 1;
       }
     }
@@ -295,7 +476,7 @@ function buildWorkout(groups, totalDone, diffKey, phaseKey, locKey, recentIds, d
     for (var pi=0; pi<pool.length && count<perG; pi++) {
       var ex = pool[pi];
       if (used[ex.id]) continue;
-      result.push(buildExercise(ex, totalDone, d, ph, diffKey, isDeload, genderKey));
+      result.push(buildExercise(ex, totalDone, d, intensityKey, diffKey, genderKey));
       used[ex.id] = 1; count++;
     }
   }
@@ -426,8 +607,144 @@ function SubSheet(p) {
 }
 
 // ── EXERCISE CARD ────────────────────────────────────────────────────────────
+function RestTimer(p) {
+  var seconds = p.seconds || 90;
+  var timerS = useState(0);
+  var t = timerS[0]; var setT = timerS[1];
+  var runningS = useState(false);
+  var running = runningS[0]; var setRunning = runningS[1];
+
+  // Auto-start on mount
+  useEffect(function(){
+    setT(seconds);
+    setRunning(true);
+  }, []);
+
+  useEffect(function(){
+    if (!running) return;
+    if (t <= 0) {
+      setRunning(false);
+      if (navigator.vibrate) navigator.vibrate([200,100,200,100,200]);
+      return;
+    }
+    var interval = setInterval(function(){
+      setT(function(prev){
+        if (prev <= 1) {
+          setRunning(false);
+          if (navigator.vibrate) navigator.vibrate([200,100,200,100,200]);
+          return 0;
+        }
+        if (prev <= 4) { if(navigator.vibrate) navigator.vibrate(30); }
+        return prev - 1;
+      });
+    }, 1000);
+    return function(){ clearInterval(interval); };
+  }, [running, t]);
+
+  function start() {
+    setT(seconds);
+    setRunning(true);
+  }
+  function dismiss() {
+    setRunning(false);
+    setT(0);
+    if (p.onDismiss) p.onDismiss();
+  }
+
+  if (!running && t === 0) return null;
+
+  var pct = t / seconds;
+  var color = t > seconds*0.5 ? C.green : t > seconds*0.25 ? C.yellow : C.red;
+  var mins = Math.floor(t/60);
+  var secs = t%60;
+  var display = mins > 0 ? mins+"m "+(secs<10?"0":"")+secs+"s" : secs+"s";
+
+  return (
+    <div style={{display:"flex",alignItems:"center",gap:"10px",background:"rgba(0,0,0,0.3)",borderRadius:"12px",padding:"10px 14px",marginTop:"8px",border:"1px solid "+color+"44"}}>
+      <div style={{position:"relative",width:"44px",height:"44px",flexShrink:0}}>
+        <svg viewBox="0 0 36 36" style={{width:"44px",height:"44px",transform:"rotate(-90deg)"}}>
+          <circle cx="18" cy="18" r="15.9" fill="none" stroke={C.border} strokeWidth="3"/>
+          <circle cx="18" cy="18" r="15.9" fill="none" stroke={color} strokeWidth="3"
+            strokeDasharray="100 100"
+            strokeDashoffset={100-(pct*100)}
+            style={{transition:"stroke-dashoffset 1s linear,stroke 0.5s"}}
+          />
+        </svg>
+        <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:"10px",fontWeight:"900",color:color,fontFamily:"monospace"}}>{t===0?"✓":display}</div>
+      </div>
+      <div style={{flex:1}}>
+        <div style={{fontSize:"12px",fontWeight:"700",color:t===0?C.green:C.text}}>{t===0?"Rest complete — go!":"Rest timer"}</div>
+        <div style={{fontSize:"11px",color:C.muted,marginTop:"2px"}}>{t===0?"Tap dismiss when ready":display+" remaining"}</div>
+      </div>
+      <button onClick={dismiss} style={{padding:"6px 14px",borderRadius:"20px",border:"1px solid "+C.border,background:"transparent",color:C.muted,fontSize:"12px",fontWeight:"700",cursor:"pointer",fontFamily:"inherit",flexShrink:0}}>{t===0?"Dismiss":"Skip"}</button>
+    </div>
+  );
+}
+
+function TimedSet(p) {
+  var seconds = p.seconds || 45;
+  var onDone = p.onDone;
+  var timerS = useState(seconds);
+  var t = timerS[0]; var setT = timerS[1];
+  var runningS = useState(false);
+  var running = runningS[0]; var setRunning = runningS[1];
+  var doneS = useState(false);
+  var done = doneS[0]; var setDone = doneS[1];
+
+  useEffect(function(){
+    if (!running || t <= 0) return;
+    var interval = setInterval(function(){
+      setT(function(prev){
+        if (prev <= 1) {
+          setRunning(false);
+          setDone(true);
+          if (navigator.vibrate) navigator.vibrate([200,100,200]);
+          if (onDone) onDone();
+          return 0;
+        }
+        if (prev <= 4) { if (navigator.vibrate) navigator.vibrate(50); }
+        return prev - 1;
+      });
+    }, 1000);
+    return function(){ clearInterval(interval); };
+  }, [running, t]);
+
+  function startStop() {
+    if (done) {
+      setT(seconds); setDone(false); setRunning(false);
+    } else {
+      setRunning(function(r){ return !r; });
+    }
+  }
+
+  var pct = (t / seconds) * 100;
+  var color = t > seconds*0.5 ? C.green : t > seconds*0.25 ? C.yellow : C.red;
+
+  return (
+    <div style={{display:"flex",alignItems:"center",gap:"10px",padding:"10px 0"}}>
+      <div style={{position:"relative",width:"56px",height:"56px",flexShrink:0}}>
+        <svg viewBox="0 0 36 36" style={{width:"56px",height:"56px",transform:"rotate(-90deg)"}}>
+          <circle cx="18" cy="18" r="15.9" fill="none" stroke={C.border} strokeWidth="2.5"/>
+          <circle cx="18" cy="18" r="15.9" fill="none" stroke={color} strokeWidth="2.5"
+            strokeDasharray={"100 100"}
+            strokeDashoffset={100-pct}
+            style={{transition:"stroke-dashoffset 1s linear, stroke 0.3s"}}
+          />
+        </svg>
+        <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:"13px",fontWeight:"900",color:done?C.green:color}}>{done?"✓":t}</div>
+      </div>
+      <div style={{flex:1}}>
+        <div style={{fontSize:"12px",color:C.muted,marginBottom:"4px"}}>{done?"Set complete! Tap to reset":running?"Hold position...":"Tap to start timer"}</div>
+        <button onClick={startStop} style={{padding:"8px 20px",borderRadius:"20px",border:"none",background:done?C.green:running?C.red:C.accent,color:"#fff",fontWeight:"800",fontSize:"12px",cursor:"pointer",fontFamily:"inherit"}}>
+          {done?"Reset":running?"Pause":"Start"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function ExCard(p) {
-  var ex=p.ex, idx=p.idx, onSwap=p.onSwap, plateaued=p.plateaued, lastWeight=p.lastWeight, onNoteChange=p.onNoteChange;
+  var ex=p.ex, idx=p.idx, onSwap=p.onSwap, plateaued=p.plateaued, lastWeight=p.lastWeight, onNoteChange=p.onNoteChange, lastSets=p.lastSets;
   var openS = useState(false);
   var open = openS[0]; var setOpen = openS[1];
   var subS = useState(false);
@@ -441,6 +758,9 @@ function ExCard(p) {
   var inputVal = inpS[0]; var setInputVal = inpS[1];
   var noteS = useState(ex.note||"");
   var note = noteS[0]; var setNote = noteS[1];
+  var restActiveS = useState(false);
+  var restActive = restActiveS[0]; var setRestActive = restActiveS[1];
+  var restSeconds = parseInt((ex.rest||"90s").replace("s","")) || 90;
 
   useEffect(function(){ setWt(ex.suggestedWeight!==undefined?ex.suggestedWeight:(ex.w||0)); }, [ex.id, ex.suggestedWeight]);
 
@@ -466,6 +786,56 @@ function ExCard(p) {
     if (onNoteChange) onNoteChange(ex.id, v);
   }
 
+  // Set-by-set logging
+  var setLogsS = useState(function(){
+    var saved = gs("ig_sets_"+ex.id, null);
+    if (saved) return saved;
+    var defaults = [];
+    var numSets = ex.sets||3;
+    for (var si=0; si<numSets; si++) {
+      defaults.push({weight: ex.suggestedWeight||ex.w||0, reps: "", done: false});
+    }
+    return defaults;
+  });
+  // Reset set logs when exercise changes (e.g. after rebuild)
+  useEffect(function(){
+    var saved = gs("ig_sets_"+ex.id, null);
+    if (saved) { setSetLogs(saved); return; }
+    var defaults = [];
+    for (var ri=0; ri<(ex.sets||3); ri++) {
+      defaults.push({weight: ex.suggestedWeight||ex.w||0, reps: "", done: false});
+    }
+    setSetLogs(defaults);
+  }, [ex.id]);
+  var setLogs = setLogsS[0]; var setSetLogs = setLogsS[1];
+
+  function updateSetLog(i, field, value) {
+    var updated = setLogs.map(function(s, si){
+      if (si !== i) return s;
+      var patch = {};
+      if (field==="weight") patch.weight = value;
+      else if (field==="reps") patch.reps = value;
+      else if (field==="done") patch.done = value;
+      return Object.assign({}, s, patch);
+    });
+    setSetLogs(updated);
+    // Save both as current and as today's dated record
+    ss("ig_sets_"+ex.id, updated);
+    ss("ig_sets_"+ex.id+"_"+TODAY, updated);
+    if (field==="done" && value && onNoteChange) {
+      onNoteChange(ex.id+"_sets", updated);
+    }
+  }
+
+  function addSet() {
+    var last = setLogs[setLogs.length-1]||{weight:ex.suggestedWeight||ex.w||0,reps:"",done:false};
+    var updated = setLogs.concat([{weight:last.weight, reps:"", done:false}]);
+    setSetLogs(updated);
+    ss("ig_sets_"+ex.id, updated);
+  }
+
+  var doneCount = setLogs.filter(function(s){return s.done;}).length;
+
   var numBg = ex.isSupersetPair ? C.purple : C.accent;
   var cardBorder = plateaued ? C.yellow+"55" : ex.isSupersetPair ? C.purple+"44" : C.border;
 
@@ -490,17 +860,68 @@ function ExCard(p) {
             </div>
             <button onClick={function(){setOpen(function(o){return !o;});}} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",padding:"4px"}}><IChev o={open}/></button>
           </div>
-          {ex.w>0 && (
-            <div style={{display:"flex",alignItems:"center",gap:"8px",marginTop:"12px"}}>
-              <span style={{fontSize:"11px",color:C.muted,flex:1}}>Weight</span>
-              <button onClick={function(){adj(-inc);}} style={{width:"32px",height:"32px",borderRadius:"8px",border:"1px solid "+C.border,background:"transparent",color:C.text,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><IMinus/></button>
-              {editing
-                ? <input type="number" value={inputVal} onChange={function(e){setInputVal(e.target.value);}} onBlur={commitEdit} autoFocus style={{fontSize:"14px",fontWeight:"800",color:C.accent,width:"80px",textAlign:"center",background:"transparent",border:"1px solid "+C.accent,borderRadius:"8px",padding:"4px 6px",outline:"none",fontFamily:"inherit"}}/>
-                : <button onClick={startEdit} style={{fontSize:"14px",fontWeight:"800",color:C.accent,minWidth:"80px",textAlign:"center",background:"transparent",border:"1px dashed "+C.accent+"55",borderRadius:"8px",padding:"4px 8px",cursor:"pointer",fontFamily:"inherit"}}>{wt} lbs</button>
-              }
-              <button onClick={function(){adj(inc);}} style={{width:"32px",height:"32px",borderRadius:"8px",border:"1px solid "+C.border,background:"transparent",color:C.text,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><IPlus/></button>
+          {/* Set Logger */}
+          <div style={{marginTop:"12px"}}>
+            <div style={{display:"flex",alignItems:"center",marginBottom:"6px"}}>
+              <span style={{fontSize:"10px",color:C.muted,textTransform:"uppercase",letterSpacing:"0.1em",fontFamily:"monospace",flex:1}}>Set log — {doneCount}/{setLogs.length} done</span>
+              <button onClick={addSet} style={{fontSize:"11px",color:C.accent,background:"transparent",border:"none",cursor:"pointer",fontFamily:"inherit",fontWeight:"700"}}>+ Add set</button>
             </div>
-          )}
+            {/* Timed exercise - show countdown timer per set */}
+            {ex.timed ? (
+              <div>
+                {setLogs.map(function(s, i){
+                  return (
+                    <div key={i} style={{borderBottom:"1px solid "+C.border,paddingBottom:"8px",marginBottom:"8px",opacity:s.done?0.5:1}}>
+                      <div style={{fontSize:"11px",color:C.muted,marginBottom:"4px",fontFamily:"monospace"}}>SET {i+1} {s.done?"✓ DONE":""}</div>
+                      {!s.done
+                        ? <TimedSet seconds={ex.timed} onDone={function(){updateSetLog(i,"done",true);if(navigator.vibrate)navigator.vibrate([100,50,100]);}}/>
+                        : <div style={{fontSize:"12px",color:C.green,padding:"8px 0"}}>✓ Completed {ex.timed}s</div>
+                      }
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div>
+                {/* Header row */}
+                <div style={{display:"grid",gridTemplateColumns:"28px 1fr 1fr 32px",gap:"4px",marginBottom:"4px",padding:"0 2px"}}>
+                  <span style={{fontSize:"10px",color:C.muted,fontFamily:"monospace",textAlign:"center"}}>SET</span>
+                  <span style={{fontSize:"10px",color:C.muted,fontFamily:"monospace",textAlign:"center"}}>LBS</span>
+                  <span style={{fontSize:"10px",color:C.muted,fontFamily:"monospace",textAlign:"center"}}>REPS</span>
+                  <span></span>
+                </div>
+                {setLogs.map(function(s, i){
+                  return (
+                    <div key={i} style={{display:"grid",gridTemplateColumns:"28px 1fr 1fr 32px",gap:"4px",marginBottom:"4px",alignItems:"center",opacity:s.done?0.6:1}}>
+                      <span style={{fontSize:"12px",color:C.muted,fontFamily:"monospace",textAlign:"center",fontWeight:"700"}}>{i+1}</span>
+                      <input type="number" value={s.weight} onChange={function(e){updateSetLog(i,"weight",parseFloat(e.target.value)||0);}} style={{background:s.done?"transparent":"#1a1614",border:"1px solid "+(s.done?"transparent":C.border),borderRadius:"8px",padding:"8px 4px",color:s.done?C.muted:C.accent,fontSize:"13px",fontWeight:"800",textAlign:"center",fontFamily:"inherit",outline:"none",width:"100%"}}/>
+                      <input type="number" placeholder={ex.reps} value={s.reps} onChange={function(e){updateSetLog(i,"reps",e.target.value);}} style={{background:s.done?"transparent":"#1a1614",border:"1px solid "+(s.done?"transparent":C.border),borderRadius:"8px",padding:"8px 4px",color:s.done?C.muted:C.text,fontSize:"13px",fontWeight:"700",textAlign:"center",fontFamily:"inherit",outline:"none",width:"100%"}}/>
+                      <button onClick={function(){
+                        var newDone = !s.done;
+                        updateSetLog(i,"done",newDone);
+                        if(navigator.vibrate)navigator.vibrate(50);
+                        // Start rest timer when set is marked done (not undone)
+                        // Only start if not the last set
+                        if(newDone && i < setLogs.length-1) setRestActive(true);
+                      }} style={{width:"32px",height:"32px",borderRadius:"8px",border:"1px solid "+(s.done?C.green:C.border),background:s.done?C.green+"22":"transparent",color:s.done?C.green:C.muted,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"14px"}}>{s.done?"✓":"○"}</button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {/* Rest timer - shows after marking a set done */}
+            {restActive && <RestTimer seconds={restSeconds} onDismiss={function(){setRestActive(false);}}/>}
+
+            {/* Last session sets */}
+            {lastSets && lastSets.filter(function(s){return s.done;}).length > 0 && (
+              <div style={{marginTop:"6px",padding:"6px 8px",background:"rgba(255,255,255,0.03)",borderRadius:"6px",border:"1px solid "+C.border}}>
+                <div style={{fontSize:"10px",color:C.muted,fontFamily:"monospace",marginBottom:"4px",textTransform:"uppercase",letterSpacing:"0.08em"}}>Last session</div>
+                <div style={{display:"flex",gap:"6px",flexWrap:"wrap"}}>
+                  {lastSets.filter(function(s){return s.done;}).map(function(s,i){ return <span key={i} style={{fontSize:"11px",color:C.muted,background:"rgba(255,255,255,0.05)",padding:"2px 7px",borderRadius:"20px"}}>{s.weight}×{s.reps||"?"}</span>; })}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
         {open && (
           <div style={{borderTop:"1px solid "+C.border,padding:"12px 16px",background:"#111"}}>
@@ -605,13 +1026,16 @@ function SettingsScreen(p) {
     );
   }
 
-  if (type === "phase") {
-    var autoPh = PHASES[p.autoPhase];
+  if (type === "intensity") {
     return (
       <div style={{padding:"52px 24px 80px"}}>
         <BackBtn onBack={onBack}/>
-        <div style={{fontSize:"20px",fontWeight:"900",marginBottom:"6px"}}>Training Phase</div>
-        <div style={{fontSize:"13px",color:C.muted,marginBottom:"20px",lineHeight:1.6}}>Auto phase: <span style={{color:autoPh.color,fontWeight:"700"}}>{autoPh.emoji} {autoPh.label}</span></div>
+        <div style={{fontSize:"20px",fontWeight:"900",marginBottom:"6px"}}>Today's Intensity</div>
+        <div style={{fontSize:"13px",color:C.muted,marginBottom:"6px",lineHeight:1.6}}>Normally this is set automatically based on how much you've trained this week and your energy rating. You can override it here.</div>
+        <div style={{background:"rgba(232,93,38,0.08)",border:"1px solid rgba(232,93,38,0.2)",borderRadius:"12px",padding:"12px 14px",marginBottom:"20px"}}>
+          <div style={{fontSize:"12px",color:C.accent,fontWeight:"700",marginBottom:"3px"}}>🤖 Auto mode reads your week</div>
+          <div style={{fontSize:"11px",color:C.muted,lineHeight:1.5}}>Trained a lot recently? It drops intensity. Fresh and energetic? It pushes harder. You never need to touch this.</div>
+        </div>
         <button onClick={function(){onSelect(null);}} style={{width:"100%",display:"flex",alignItems:"center",gap:"16px",background:current===null?"rgba(255,255,255,0.08)":C.card,border:"2px solid "+(current===null?C.accent:C.border),borderRadius:"16px",padding:"18px",marginBottom:"12px",cursor:"pointer",textAlign:"left",fontFamily:"inherit"}}>
           <div style={{fontSize:"32px"}}>🤖</div>
           <div style={{flex:1}}>
@@ -619,21 +1043,21 @@ function SettingsScreen(p) {
               <span style={{fontWeight:"800",fontSize:"16px",color:current===null?C.accent:C.text}}>Auto</span>
               {current===null && <span style={{fontSize:"10px",background:C.accent+"22",color:C.accent,padding:"2px 8px",borderRadius:"20px",fontWeight:"700"}}>Active</span>}
             </div>
-            <div style={{fontSize:"12px",color:C.muted,marginTop:"5px"}}>App cycles phases automatically based on sessions</div>
+            <div style={{fontSize:"12px",color:C.muted,marginTop:"5px"}}>Smart — adjusts based on your week and energy</div>
           </div>
         </button>
-        {Object.keys(PHASES).map(function(key){
-          var ph=PHASES[key]; var isCur=current===key;
+        {Object.keys(INTENSITY).map(function(key){
+          var inten=INTENSITY[key]; var isCur=current===key;
           return (
-            <button key={key} onClick={function(){onSelect(key);}} style={{width:"100%",display:"flex",alignItems:"center",gap:"16px",background:isCur?ph.color+"18":C.card,border:"2px solid "+(isCur?ph.color:C.border),borderRadius:"16px",padding:"18px",marginBottom:"12px",cursor:"pointer",textAlign:"left",fontFamily:"inherit"}}>
-              <div style={{fontSize:"32px"}}>{ph.emoji}</div>
+            <button key={key} onClick={function(){onSelect(key);}} style={{width:"100%",display:"flex",alignItems:"center",gap:"16px",background:isCur?inten.color+"18":C.card,border:"2px solid "+(isCur?inten.color:C.border),borderRadius:"16px",padding:"18px",marginBottom:"12px",cursor:"pointer",textAlign:"left",fontFamily:"inherit"}}>
+              <div style={{fontSize:"32px"}}>{inten.emoji}</div>
               <div style={{flex:1}}>
                 <div style={{display:"flex",alignItems:"center",gap:"8px"}}>
-                  <span style={{fontWeight:"800",fontSize:"16px",color:isCur?ph.color:C.text}}>{ph.label}</span>
-                  {isCur && <span style={{fontSize:"10px",background:ph.color+"22",color:ph.color,padding:"2px 8px",borderRadius:"20px",fontWeight:"700"}}>Active</span>}
+                  <span style={{fontWeight:"800",fontSize:"16px",color:isCur?inten.color:C.text}}>{inten.label}</span>
+                  {isCur && <span style={{fontSize:"10px",background:inten.color+"22",color:inten.color,padding:"2px 8px",borderRadius:"20px",fontWeight:"700"}}>Active</span>}
                 </div>
-                <div style={{fontSize:"12px",color:C.muted,marginTop:"5px"}}>{ph.note}</div>
-                <div style={{fontSize:"11px",color:ph.color,marginTop:"3px"}}>Reps: {ph.reps}</div>
+                <div style={{fontSize:"12px",color:C.muted,marginTop:"5px"}}>{inten.note}</div>
+                <div style={{fontSize:"11px",color:inten.color,marginTop:"3px"}}>Target: {inten.reps} reps · {Math.round(inten.weightMult*100)}% weight</div>
               </div>
             </button>
           );
@@ -882,8 +1306,8 @@ function App() {
   var diffKey=diffKeyS[0]; var setDiffKey=diffKeyS[1];
   var locKeyS = useState(function(){return gs("ig_l3","gym");});
   var locKey=locKeyS[0]; var setLocKey=locKeyS[1];
-  var manualPhaseS = useState(function(){return gs("ig_phase",null);});
-  var manualPhase=manualPhaseS[0]; var setManualPhase=manualPhaseS[1];
+  var intensityOverrideS = useState(null); // null = auto
+  var intensityOverride=intensityOverrideS[0]; var setIntensityOverride=intensityOverrideS[1];
   var genderS = useState(function(){return gs("ig_gender",null);});
   var gender=genderS[0]; var setGender=genderS[1];
   var durationS = useState(function(){return gs("ig_dur",60);});
@@ -902,16 +1326,19 @@ function App() {
   var startTime=startTimeS[0]; var setStartTime=startTimeS[1];
   var elapsedS = useState(0);
   var elapsed=elapsedS[0]; var setElapsed=elapsedS[1];
+  var showTipsS = useState(function(){ return gs("ig_tips_seen", false) === false; });
+  var warmupIdxS = useState(0);
+  var warmupIdx=warmupIdxS[0]; var setWarmupIdx=warmupIdxS[1];
+  var showTips=showTipsS[0]; var setShowTips=showTipsS[1];
 
   var todayRec = history[TODAY];
   var streak = buildStreak(history);
   var totalDone = Object.keys(history).filter(function(d){return history[d]&&history[d].status==="done";}).length;
-  var phaseKey = manualPhase || getPhase(totalDone);
-  var phase = PHASES[phaseKey];
+  var intensityKey = intensityOverride || getIntensity(history, energy);
+  var intensity = INTENSITY[intensityKey] || INTENSITY.moderate;
   var diff = DIFFICULTY[diffKey];
-  var isMonday = new Date().getDay()===1;
   var weightLoggedThisWeek = (stats.bodyLog||[]).some(function(e){return e.date>=WEEK_START;});
-  var showWeightReminder = isMonday && !weightLoggedThisWeek;
+  var showWeightReminder = !weightLoggedThisWeek;
 
   useEffect(function(){
     if (todayRec && todayRec.exercises && todayRec.sessMeta) {
@@ -945,14 +1372,34 @@ function App() {
   function saveH(next){ setHistory(next); ss("ig_h6",next); }
   function saveS(next){ setStats(next); ss("ig_s6",next); }
 
+  function getLastWeight(exId) {
+    var past = Object.keys(history).filter(function(d){return d!==TODAY&&history[d]&&history[d].status==="done";}).sort().reverse();
+    for (var i=0;i<past.length;i++) {
+      var exs = history[past[i]].exercises||[];
+      for (var j=0;j<exs.length;j++) {
+        if (exs[j].id===exId) return getW()[exId]||exs[j].suggestedWeight||exs[j].w;
+      }
+    }
+    return null;
+  }
+
+  function getLastSets(exId) {
+    var past = Object.keys(history).filter(function(d){return d!==TODAY&&history[d]&&history[d].status==="done";}).sort().reverse();
+    for (var i=0;i<past.length;i++) {
+      var dated = gs("ig_sets_"+exId+"_"+past[i], null);
+      if (dated && dated.some(function(s){return s.done;})) return dated;
+    }
+    return null;
+  }
+
   function rebuildExercises(newDiff, newPhase, newLoc) {
     if (!sessMeta) return;
     setRebuilding(true);
     var past = Object.keys(history).filter(function(d){return d!==TODAY;}).sort().reverse().slice(0,10);
     var recent = [];
     past.forEach(function(d){ (history[d]&&history[d].exercises||[]).forEach(function(e){recent.push(e.id);}); });
-    var resolvedPhase = newPhase !== undefined ? newPhase : phaseKey;
-    var newExs = buildWorkout(sessMeta.groups, totalDone, newDiff||diffKey, resolvedPhase, newLoc||locKey, recent, duration, gender);
+    var resolvedPhase = intensityKey;
+    var newExs = buildWorkout(sessMeta.groups, totalDone, newDiff||diffKey, intensityKey, newLoc||locKey, recent, duration, gender);
     setExercises(newExs);
     var updated = Object.assign({}, history[TODAY]||{}, {exercises:newExs});
     saveH(Object.assign({}, history, {[TODAY]:updated}));
@@ -969,10 +1416,9 @@ function App() {
     if (sessMeta && (workPhase==="workout"||workPhase==="done")) rebuildExercises(undefined, undefined, k);
     setScreen("home");
   }
-  function applyPhase(k) {
-    setManualPhase(k); ss("ig_phase",k);
-    var resolved = k || getPhase(totalDone);
-    if (sessMeta && (workPhase==="workout"||workPhase==="done")) rebuildExercises(undefined, resolved, undefined);
+  function applyIntensity(k) {
+    setIntensityOverride(k);
+    if (sessMeta && (workPhase==="workout"||workPhase==="done")) rebuildExercises(undefined, undefined, undefined);
     setScreen("home");
   }
   function applyGender(k) {
@@ -1000,14 +1446,15 @@ function App() {
     var recent = [];
     past.forEach(function(d){ (history[d]&&history[d].exercises||[]).forEach(function(e){recent.push(e.id);}); });
     var dc = DURATION_CONFIG[duration]||DURATION_CONFIG[60];
-    var exs = buildWorkout(s.groups, totalDone, diffKey, phaseKey, locKey, recent, duration, gender);
+    var exs = buildWorkout(s.groups, totalDone, diffKey, intensityKey, locKey, recent, duration, gender);
     var finishers = dc.finisher ? pickFinishers(s.key, totalDone) : [];
     var allExs = exs.concat(finishers);
     var t = Date.now();
     setExercises(allExs);
     setSessMeta(s);
     setStartTime(t);
-    var freshToday = {sessionKey:s.key,sessMeta:s,exercises:allExs,energy:energy,diffKey:diffKey,phaseKey:phaseKey,locKey:locKey,startTime:t};
+    setWarmupIdx(0);
+    var freshToday = {sessionKey:s.key,sessMeta:s,exercises:allExs,energy:energy,diffKey:diffKey,intensityKey:intensityKey,locKey:locKey,startTime:t};
     saveH(Object.assign({},history,{[TODAY]:freshToday}));
     setWorkPhase("workout");
   }
@@ -1031,19 +1478,25 @@ function App() {
   function markDone() {
     var dur = startTime ? Math.round((Date.now()-startTime)/60000) : null;
     var nw = exercises.filter(function(e){return e.w>0;}).map(function(e){
-      var cur = (getW()[e.id]||e.suggestedWeight||e.w);
+      var setData = gs("ig_sets_"+e.id, null);
+      var doneSets = setData ? setData.filter(function(s){return s.done&&s.weight>0;}) : [];
+      var allRepsHit = doneSets.length>0 && doneSets.every(function(s){ return parseInt(s.reps)>0; });
+      var cur = doneSets.length>0 ? Math.max.apply(null,doneSets.map(function(s){return s.weight;})) : (getW()[e.id]||e.suggestedWeight||e.w);
       var inc = COMPOUND[e.id]?5:2.5;
-      var next = Math.round((cur+inc)/2.5)*2.5;
-      var l=getW(); l[e.id]=next; saveW(l);
-      return e.name+": "+cur+" → "+next+" lbs";
+      // Only advance weight if all sets were completed
+      var next = allRepsHit ? Math.round((cur+inc)/2.5)*2.5 : cur;
+      var l=getW(); l[e.id]=cur; saveW(l);
+      return e.name+": "+cur+" lbs"+(allRepsHit?" → "+next+" lbs next":" (repeat weight)");
     });
-    // Auto-detect PRs
+    // Auto-detect PRs from actual logged sets
     var autoPRs = [];
     exercises.filter(function(e){return e.w>0&&e.isPR;}).forEach(function(e){
-      var curW = getW()[e.id]||e.suggestedWeight||e.w;
+      var setData = gs("ig_sets_"+e.id, null);
+      var doneSets = setData ? setData.filter(function(s){return s.done&&s.weight>0;}) : [];
+      var bestW = doneSets.length ? Math.max.apply(null,doneSets.map(function(s){return s.weight;})) : (getW()[e.id]||e.suggestedWeight||e.w);
       var prevPRs = (stats.prs||[]).filter(function(p){return p.exercise===e.name;});
       var prevBest = prevPRs.length ? Math.max.apply(null,prevPRs.map(function(p){return p.weight;})) : 0;
-      if (curW > prevBest) autoPRs.push({date:TODAY,exercise:e.name,weight:curW,auto:true});
+      if (bestW > prevBest) autoPRs.push({date:TODAY,exercise:e.name,weight:bestW,reps:doneSets.length?doneSets[0].reps:"",auto:true});
     });
     if (autoPRs.length>0) {
       var updatedPRs = (stats.prs||[]).concat(autoPRs).sort(function(a,b){return b.date.localeCompare(a.date);});
@@ -1066,7 +1519,7 @@ function App() {
     var n = Object.assign({},history); delete n[TODAY];
     saveH(n);
     setExercises([]); setSessMeta(null); setNotes(""); setStartTime(null);
-    setEnergy(null); setNewPRs([]); setWorkPhase("energy");
+    setEnergy(null); setNewPRs([]); setWarmupIdx(0); setWorkPhase("energy");
   }
 
   function shareSession() {
@@ -1091,7 +1544,7 @@ function App() {
     var bg = {minHeight:"100vh",background:C.bg,color:C.text,fontFamily:"system-ui,-apple-system,sans-serif"};
     if (screen==="difficulty") return <div style={bg}><SettingsScreen type="difficulty" current={diffKey} totalDone={totalDone} onSelect={applyDiff} onBack={screenProps.onBack}/></div>;
     if (screen==="location")   return <div style={bg}><SettingsScreen type="location"   current={locKey}  onSelect={applyLoc}  onBack={screenProps.onBack}/></div>;
-    if (screen==="phase")      return <div style={bg}><SettingsScreen type="phase"      current={manualPhase} autoPhase={getPhase(totalDone)} onSelect={applyPhase} onBack={screenProps.onBack}/></div>;
+    if (screen==="intensity")      return <div style={bg}><SettingsScreen type="intensity"  current={intensityOverride} onSelect={applyIntensity} onBack={screenProps.onBack}/></div>;
     if (screen==="gender")     return <div style={bg}><SettingsScreen type="gender"     current={gender}  onSelect={applyGender} onBack={screenProps.onBack}/></div>;
   }
 
@@ -1099,6 +1552,30 @@ function App() {
 
   return (
     <div style={mainSt}>
+
+      {/* HOW TO USE - first launch tips */}
+      {showTips && (
+        <div style={{position:"fixed",inset:0,zIndex:998,background:"rgba(0,0,0,0.92)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"32px"}}>
+          <div style={{fontSize:"40px",marginBottom:"12px"}}>🏋️</div>
+          <div style={{fontSize:"22px",fontWeight:"900",color:C.text,marginBottom:"6px",textAlign:"center"}}>Welcome to Iron Log</div>
+          <div style={{fontSize:"13px",color:C.muted,marginBottom:"28px",textAlign:"center"}}>Here's how it works in 3 steps.</div>
+          <div style={{width:"100%",display:"flex",flexDirection:"column",gap:"14px",marginBottom:"32px"}}>
+            <div style={{background:C.card,border:"1px solid "+C.border,borderRadius:"14px",padding:"16px",display:"flex",gap:"14px",alignItems:"flex-start"}}>
+              <div style={{fontSize:"28px",flexShrink:0}}>😴</div>
+              <div><div style={{fontWeight:"800",color:C.text,marginBottom:"3px"}}>Rate your energy</div><div style={{fontSize:"13px",color:C.muted,lineHeight:1.5}}>Every day starts with a 1–5 energy check. It routes you to the right session intensity.</div></div>
+            </div>
+            <div style={{background:C.card,border:"1px solid "+C.border,borderRadius:"14px",padding:"16px",display:"flex",gap:"14px",alignItems:"flex-start"}}>
+              <div style={{fontSize:"28px",flexShrink:0}}>📋</div>
+              <div><div style={{fontWeight:"800",color:C.text,marginBottom:"3px"}}>Log your sets</div><div style={{fontSize:"13px",color:C.muted,lineHeight:1.5}}>Tap an exercise to expand tips. Enter your weight and reps for each set, then tap ○ to mark it done.</div></div>
+            </div>
+            <div style={{background:C.card,border:"1px solid "+C.border,borderRadius:"14px",padding:"16px",display:"flex",gap:"14px",alignItems:"flex-start"}}>
+              <div style={{fontSize:"28px",flexShrink:0}}>✅</div>
+              <div><div style={{fontWeight:"800",color:C.text,marginBottom:"3px"}}>Tap Done!</div><div style={{fontSize:"13px",color:C.muted,lineHeight:1.5}}>When finished, hit Done. Your PRs are detected automatically and next session targets are calculated.</div></div>
+            </div>
+          </div>
+          <button onClick={function(){setShowTips(false);ss("ig_tips_seen",true);}} style={{width:"100%",padding:"16px",borderRadius:"14px",border:"none",background:C.accent,color:"#fff",fontWeight:"900",fontSize:"16px",cursor:"pointer",fontFamily:"inherit"}}>Let's go 💪</button>
+        </div>
+      )}
 
       {/* REBUILD TOAST */}
       {rebuilding && <div style={{position:"fixed",top:"20px",left:"50%",transform:"translateX(-50%)",zIndex:500,background:C.accent,color:"#000",padding:"10px 20px",borderRadius:"20px",fontSize:"13px",fontWeight:"800"}}>⟳ Rebuilding workout...</div>}
@@ -1124,7 +1601,7 @@ function App() {
           <div style={{fontSize:"28px",fontWeight:"900",letterSpacing:"-1px"}}>Iron Log<span style={{color:C.accent}}>.</span></div>
           <div style={{display:"flex",gap:"5px",flexWrap:"wrap"}}>
             <button onClick={function(){setScreen("location");}} style={{background:C.card,border:"1px solid "+C.border,borderRadius:"20px",padding:"5px 10px",cursor:"pointer",fontSize:"11px",color:C.muted,fontFamily:"inherit",fontWeight:"600"}}>{LOCATIONS[locKey].emoji} {LOCATIONS[locKey].label.split(" ")[0]}</button>
-            <button onClick={function(){setScreen("phase");}} style={{background:C.card,border:"1px solid "+phase.color+"55",borderRadius:"20px",padding:"5px 10px",cursor:"pointer",fontSize:"11px",color:phase.color,fontFamily:"inherit",fontWeight:"700"}}>{phase.emoji} {phase.label}</button>
+            <button onClick={function(){setScreen("intensity");}} style={{background:C.card,border:"1px solid "+intensity.color+"55",borderRadius:"20px",padding:"5px 10px",cursor:"pointer",fontSize:"11px",color:intensity.color,fontFamily:"inherit",fontWeight:"700"}}>{intensity.emoji} {intensity.label}</button>
             <button onClick={function(){setScreen("difficulty");}} style={{background:C.card,border:"1px solid "+diff.color+"55",borderRadius:"20px",padding:"5px 10px",cursor:"pointer",fontSize:"11px",color:diff.color,fontFamily:"inherit",fontWeight:"700"}}>{diff.emoji} {diff.label}</button>
             <button onClick={function(){setScreen("gender");}} style={{background:C.card,border:"1px solid "+C.border,borderRadius:"20px",padding:"5px 10px",cursor:"pointer",fontSize:"11px",color:C.muted,fontFamily:"inherit",fontWeight:"600"}}>{GENDER_CONFIG[gender]?GENDER_CONFIG[gender].emoji:"⚙️"}</button>
           </div>
@@ -1153,9 +1630,16 @@ function App() {
             )}
 
             {/* Phase pill */}
-            <div style={{background:phase.color+"14",border:"1px solid "+phase.color+"33",borderRadius:"12px",padding:"10px 14px",marginBottom:"14px",display:"flex",alignItems:"center",gap:"10px"}}>
-              <span style={{fontSize:"18px"}}>{phase.emoji}</span>
-              <div><div style={{fontSize:"12px",fontWeight:"700",color:phase.color}}>{phase.label} Phase{manualPhase?" (manual)":""}</div><div style={{fontSize:"11px",color:C.muted}}>{phase.note}</div></div>
+            <div onClick={function(){setScreen("intensity");}} style={{background:intensity.color+"14",border:"1px solid "+intensity.color+"33",borderRadius:"12px",padding:"10px 14px",marginBottom:"14px",display:"flex",alignItems:"center",gap:"10px",cursor:"pointer"}}>
+              <span style={{fontSize:"18px"}}>{intensity.emoji}</span>
+              <div style={{flex:1}}>
+                <div style={{fontSize:"12px",fontWeight:"700",color:intensity.color}}>{intensity.label} Intensity{intensityOverride?" · manual":""}</div>
+                <div style={{fontSize:"11px",color:C.muted}}>{intensity.note}</div>
+              </div>
+              {intensityOverride
+                ? <button onClick={function(e){e.stopPropagation();setIntensityOverride(null);}} style={{fontSize:"10px",color:C.muted,background:"transparent",border:"none",cursor:"pointer",fontFamily:"inherit",flexShrink:0}}>reset</button>
+                : <span style={{fontSize:"10px",color:intensity.color+"99",flexShrink:0}}>auto ›</span>
+              }
             </div>
 
             {/* Streak */}
@@ -1270,36 +1754,31 @@ function App() {
                 <div style={{background:"#111",border:"1px solid "+C.border,borderRadius:"14px",padding:"16px",marginBottom:"20px"}}>
                   <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"4px"}}>
                     <div style={{fontSize:"10px",color:C.muted,textTransform:"uppercase",letterSpacing:"0.1em",fontFamily:"monospace"}}>Today's Session</div>
-                    <button onClick={resetToday} style={{display:"flex",alignItems:"center",gap:"5px",background:"rgba(255,255,255,0.07)",border:"1px solid "+C.border,borderRadius:"20px",padding:"5px 12px",cursor:"pointer",fontSize:"12px",color:C.muted,fontFamily:"inherit",fontWeight:"700"}}>↺ Change</button>
+                    <button onClick={function(){if(window.confirm("Change session? Your current exercises will reset.")){resetToday();}}} style={{display:"flex",alignItems:"center",gap:"5px",background:"rgba(255,255,255,0.07)",border:"1px solid "+C.border,borderRadius:"20px",padding:"5px 12px",cursor:"pointer",fontSize:"12px",color:C.muted,fontFamily:"inherit",fontWeight:"700"}}>↺ Change</button>
                   </div>
                   <div style={{fontSize:"20px",fontWeight:"900",color:C.text,marginTop:"4px"}}>{sessMeta.emoji} {sessMeta.label}</div>
-                  <div style={{display:"flex",gap:"8px",marginTop:"8px",flexWrap:"wrap",alignItems:"center"}}>
-                    <span style={{fontSize:"11px",color:phase.color,fontWeight:"600"}}>{phase.emoji} {phase.label}</span>
-                    <span style={{fontSize:"11px",color:diff.color,fontWeight:"600"}}>{diff.emoji} {diff.label}</span>
-                    <span style={{fontSize:"11px",color:C.muted}}>{LOCATIONS[locKey].emoji} {LOCATIONS[locKey].label}</span>
-                    <span style={{marginLeft:"auto",fontSize:"13px",fontWeight:"800",color:elapsed>3600?C.red:elapsed>2700?C.orange:C.accent,fontFamily:"monospace"}}>⏱ {fmtTime(elapsed)}</span>
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginTop:"6px"}}>
+                    <span style={{fontSize:"11px",color:C.muted}}>{LOCATIONS[locKey].emoji} {LOCATIONS[locKey].label} · {intensity.emoji} {intensity.label}</span>
+                    <span style={{fontSize:"13px",fontWeight:"800",color:elapsed>3600?C.red:elapsed>2700?C.orange:C.accent,fontFamily:"monospace"}}>⏱ {fmtTime(elapsed)}</span>
                   </div>
                 </div>
 
                 {(DURATION_CONFIG[duration]&&DURATION_CONFIG[duration].warmup) && (
-                  <div>
-                    <div style={{fontSize:"11px",color:C.muted,textTransform:"uppercase",letterSpacing:"0.1em",fontFamily:"monospace",marginBottom:"8px"}}>Warmup</div>
-                    <div style={{fontSize:"13px",color:"#999",lineHeight:1.7,marginBottom:"20px"}}>{WARMUPS[sessMeta.key]||WARMUPS.fullbody}</div>
+                  <div style={{marginBottom:"20px"}}>
+                    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"8px"}}>
+                      <div style={{fontSize:"11px",color:C.muted,textTransform:"uppercase",letterSpacing:"0.1em",fontFamily:"monospace"}}>Warmup — ~10 min</div>
+                      <button onClick={function(){setWarmupIdx(function(i){return i+1;});}} style={{fontSize:"11px",color:C.accent,background:"transparent",border:"none",cursor:"pointer",fontFamily:"inherit",fontWeight:"700"}}>🔄 Different option</button>
+                    </div>
+                    <div style={{fontSize:"13px",color:"#bbb",lineHeight:1.7,background:"#111",borderRadius:"10px",padding:"12px 14px"}}>{getWarmup(sessMeta.key, diffKey, locKey, warmupIdx)}</div>
                   </div>
                 )}
 
-                <div style={{fontSize:"11px",color:C.muted,textTransform:"uppercase",letterSpacing:"0.1em",fontFamily:"monospace",marginBottom:"12px"}}>Exercises · tap to expand tips & subs</div>
+
 
                 {exercises.filter(function(e){return !e.isFinisher;}).map(function(ex,i){
-                  var pastDays = Object.keys(history).filter(function(d){return d!==TODAY&&history[d]&&history[d].status==="done";}).sort().reverse();
-                  var lastEntry = null;
-                  for (var di=0;di<pastDays.length;di++) {
-                    var exs = history[pastDays[di]].exercises||[];
-                    for (var ei=0;ei<exs.length;ei++) { if(exs[ei].id===ex.id){lastEntry=exs[ei];break;} }
-                    if (lastEntry) break;
-                  }
-                  var lastWt = lastEntry ? (getW()[ex.id]||lastEntry.suggestedWeight||lastEntry.w) : null;
-                  return <ExCard key={ex.id+i} ex={ex} idx={i} onSwap={swapEx} plateaued={checkPlateau(history,ex.id)} lastWeight={lastWt} onNoteChange={handleExNote}/>;
+                  var lastWt = getLastWeight(ex.id);
+                  var lastSavedSets = getLastSets(ex.id);
+                  return <ExCard key={ex.id+i} ex={ex} idx={i} onSwap={swapEx} plateaued={checkPlateau(history,ex.id)} lastWeight={lastWt} onNoteChange={handleExNote} lastSets={lastSavedSets}/>;
                 })}
 
                 {exercises.some(function(e){return e.isFinisher;}) && (
