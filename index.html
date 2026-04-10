@@ -1087,6 +1087,15 @@ function SettingsScreen(p) {
             </button>
           );
         })}
+
+        {/* Reset all data */}
+        <div style={{marginTop:"32px",borderTop:"1px solid "+C.border,paddingTop:"24px"}}>
+          <div style={{fontSize:"13px",fontWeight:"700",color:C.text,marginBottom:"6px"}}>Danger zone</div>
+          <div style={{fontSize:"12px",color:C.muted,marginBottom:"14px"}}>Wipes all sessions, weights, PRs and settings. Starts fresh like a new install.</div>
+          <button onClick={p.onReset} style={{width:"100%",padding:"14px",borderRadius:"12px",border:"1px solid rgba(255,77,77,0.4)",background:"rgba(255,77,77,0.08)",color:C.red,fontWeight:"800",fontSize:"14px",cursor:"pointer",fontFamily:"inherit"}}>
+            🗑 Reset all data
+          </button>
+        </div>
       </div>
     );
   }
@@ -1327,6 +1336,8 @@ function App() {
   var elapsedS = useState(0);
   var elapsed=elapsedS[0]; var setElapsed=elapsedS[1];
   var showTipsS = useState(function(){ return gs("ig_tips_seen", false) === false; });
+  var confirmS = useState(null); // {message, onConfirm}
+  var confirm = confirmS[0]; var setConfirm = confirmS[1];
   var warmupIdxS = useState(0);
   var warmupIdx=warmupIdxS[0]; var setWarmupIdx=warmupIdxS[1];
   var showTips=showTipsS[0]; var setShowTips=showTipsS[1];
@@ -1515,6 +1526,19 @@ function App() {
     setWorkPhase("done");
   }
 
+  function resetAllData() {
+    if (!window.confirm("Reset everything? This deletes all your sessions, weights, PRs and settings. Cannot be undone.")) return;
+    var keys = ["ig_h6","ig_s6","ig_w5","ig_d3","ig_l3","ig_phase","ig_gender","ig_dur","ig_tips_seen","ig_intensity"];
+    keys.forEach(function(k){ try{ localStorage.removeItem(k); }catch(e){} });
+    // Clear set logs
+    var allKeys = [];
+    try{ for(var i=0;i<localStorage.length;i++){ allKeys.push(localStorage.key(i)); } }catch(e){}
+    allKeys.filter(function(k){ return k && k.indexOf("ig_sets_")===0; }).forEach(function(k){
+      try{ localStorage.removeItem(k); }catch(e){}
+    });
+    window.location.reload();
+  }
+
   function resetToday() {
     var n = Object.assign({},history); delete n[TODAY];
     saveH(n);
@@ -1545,13 +1569,27 @@ function App() {
     if (screen==="difficulty") return <div style={bg}><SettingsScreen type="difficulty" current={diffKey} totalDone={totalDone} onSelect={applyDiff} onBack={screenProps.onBack}/></div>;
     if (screen==="location")   return <div style={bg}><SettingsScreen type="location"   current={locKey}  onSelect={applyLoc}  onBack={screenProps.onBack}/></div>;
     if (screen==="intensity")      return <div style={bg}><SettingsScreen type="intensity"  current={intensityOverride} onSelect={applyIntensity} onBack={screenProps.onBack}/></div>;
-    if (screen==="gender")     return <div style={bg}><SettingsScreen type="gender"     current={gender}  onSelect={applyGender} onBack={screenProps.onBack}/></div>;
+    if (screen==="gender")     return <div style={bg}><SettingsScreen type="gender"     current={gender}  onSelect={applyGender} onReset={resetAllData} onBack={screenProps.onBack}/></div>;
   }
 
   var mainSt = {minHeight:"100vh",background:C.bg,color:C.text,fontFamily:"system-ui,-apple-system,sans-serif",maxWidth:"430px",margin:"0 auto"};
 
   return (
     <div style={mainSt}>
+
+      {/* IN-APP CONFIRM DIALOG */}
+      {confirm && (
+        <div style={{position:"fixed",inset:0,zIndex:1000,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",padding:"32px"}}>
+          <div style={{background:"#1a1614",borderRadius:"20px",padding:"24px",width:"100%",maxWidth:"360px",border:"1px solid "+C.border}}>
+            <div style={{fontSize:"16px",fontWeight:"700",color:C.text,marginBottom:"8px",textAlign:"center"}}>Are you sure?</div>
+            <div style={{fontSize:"14px",color:C.muted,marginBottom:"24px",textAlign:"center",lineHeight:1.5}}>{confirm.message}</div>
+            <div style={{display:"flex",gap:"10px"}}>
+              <button onClick={function(){setConfirm(null);}} style={{flex:1,padding:"13px",borderRadius:"12px",border:"1px solid "+C.border,background:"transparent",color:C.muted,fontWeight:"700",fontSize:"14px",cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+              <button onClick={function(){confirm.onConfirm();setConfirm(null);}} style={{flex:1,padding:"13px",borderRadius:"12px",border:"none",background:C.red,color:"#fff",fontWeight:"800",fontSize:"14px",cursor:"pointer",fontFamily:"inherit"}}>Yes, change</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* HOW TO USE - first launch tips */}
       {showTips && (
@@ -1754,7 +1792,7 @@ function App() {
                 <div style={{background:"#111",border:"1px solid "+C.border,borderRadius:"14px",padding:"16px",marginBottom:"20px"}}>
                   <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"4px"}}>
                     <div style={{fontSize:"10px",color:C.muted,textTransform:"uppercase",letterSpacing:"0.1em",fontFamily:"monospace"}}>Today's Session</div>
-                    <button onClick={function(){if(window.confirm("Change session? Your current exercises will reset.")){resetToday();}}} style={{display:"flex",alignItems:"center",gap:"5px",background:"rgba(255,255,255,0.07)",border:"1px solid "+C.border,borderRadius:"20px",padding:"5px 12px",cursor:"pointer",fontSize:"12px",color:C.muted,fontFamily:"inherit",fontWeight:"700"}}>↺ Change</button>
+                    <button onClick={function(){setConfirm({message:"Change session? Your current exercises will reset.",onConfirm:resetToday});}} style={{display:"flex",alignItems:"center",gap:"5px",background:"rgba(255,255,255,0.07)",border:"1px solid "+C.border,borderRadius:"20px",padding:"5px 12px",cursor:"pointer",fontSize:"12px",color:C.muted,fontFamily:"inherit",fontWeight:"700"}}>↺ Change</button>
                   </div>
                   <div style={{fontSize:"20px",fontWeight:"900",color:C.text,marginTop:"4px"}}>{sessMeta.emoji} {sessMeta.label}</div>
                   <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginTop:"6px"}}>
