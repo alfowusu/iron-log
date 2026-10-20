@@ -5,10 +5,12 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover"/>
 <meta name="apple-mobile-web-app-capable" content="yes"/>
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
-<meta name="apple-mobile-web-app-title" content="Iron Log"/>
+<meta name="apple-mobile-web-app-title" content="Trainer"/>
 <meta name="theme-color" content="#0d0b0a"/>
-<title>Iron Log</title>
-<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%230d0b0a'/%3E%3Ctext y='.9em' font-size='72' x='12'%3E🏋️%3C/text%3E%3C/svg%3E"/>
+<title>Personal Trainer</title>
+<link rel="manifest" href="manifest.webmanifest"/>
+<link rel="apple-touch-icon" href="icon-192.png"/>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%230d0b0a'/%3E%3Ctext y='.9em' font-size='72' x='12'%3E🏋️%3C/text%3E%3C/svg%3E"/>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
 html,body{height:100%;background:#0d0b0a;overscroll-behavior:none;}
@@ -148,6 +150,9 @@ function getIntensity(history, energy) {
 
   // Hard overrides first
   if (todayEnergy <= 2) return "recovery";
+  // Re-entry after time off: 10+ days since last completed session -> lighter session
+  var gapDays = lastDoneGap(history);
+  if (gapDays !== null && gapDays >= 10) return "light";
   if (consecutive >= 5 || (consecutive >= 4 && todayEnergy < 4)) return "recovery";
   if (sessionsThisWeek >= 6) return "recovery";
 
@@ -274,6 +279,13 @@ var EX = {
   a10:{name:"Tricep Dips",          g:"arms",equip:"bodyweight",diff:"intermediate",sets:3,reps:"12",w:0,  rest:75, tip:"Stay upright to target triceps.",                        video:"https://www.youtube.com/watch?v=6kALZikXxLc",bw:"a10",eq:"a6", isPR:false},
   a11:{name:"Chin-Ups",             g:"arms",equip:"pullup",    diff:"intermediate",sets:3,reps:"8", w:0,  rest:90, tip:"Underhand grip hits biceps harder than pull-ups.",       video:"https://www.youtube.com/watch?v=brhRXlOhsAM",bw:"a11",eq:"a3", isPR:false},
   a12:{name:"Diamond Push-Ups",     g:"arms",equip:"bodyweight",diff:"beginner",    sets:3,reps:"12",w:0,  rest:60, tip:"Hands form diamond. Elbows tight.",                     video:"https://www.youtube.com/watch?v=J0DnG1_S92I",bw:"a12",eq:"a7", isPR:false},
+  c16:{name:"Archer Push-Ups",      g:"chest",equip:"bodyweight",diff:"advanced",    sets:3,reps:"8ea",w:0, rest:75, tip:"Wide hands. Shift onto one arm, other arm stays straight.", bw:"c15",eq:"c2", isPR:false},
+  l20:{name:"Split Squat (BW)",     g:"legs", equip:"bodyweight",diff:"intermediate",sets:3,reps:"12ea",w:0, rest:60, tip:"Long stance. Back knee drops straight down. Front heel planted.", bw:"l12",eq:"l2", isPR:false},
+  l21:{name:"Bulgarian Split Squat",g:"legs", equip:"bodyweight",diff:"intermediate",sets:3,reps:"10ea",w:0, rest:75, tip:"Back foot on couch/chair. Slight forward lean. Knee tracks toes.", video:"https://www.youtube.com/watch?v=2C-uNgKwPLE",bw:"l20",eq:"l2", isPR:false},
+  l22:{name:"Assisted Pistol Squat",g:"legs", equip:"bodyweight",diff:"advanced",    sets:3,reps:"6ea", w:0, rest:90, tip:"Hold a doorframe. Sit down on one leg as low as you control.", bw:"l21",eq:"l2", isPR:false},
+  l23:{name:"Single-Leg Glute Bridge",g:"legs",equip:"bodyweight",diff:"intermediate",sets:3,reps:"12ea",w:0, rest:45, tip:"One foot planted, hips stay level. Squeeze 1s at top.", bw:"l19",eq:"l18",isPR:false},
+  s14:{name:"Elevated Pike Push-Up",g:"shoulders",equip:"bodyweight",diff:"intermediate",sets:3,reps:"10",w:0, rest:75, tip:"Feet on a chair, hips over shoulders, head toward floor.", bw:"s10",eq:"s2", isPR:false},
+  b14:{name:"Feet-Elevated Inverted Row",g:"back",equip:"bodyweight",diff:"intermediate",sets:3,reps:"10",w:0, rest:75, tip:"Feet on a chair, body straight, pull chest to bar/table edge.", bw:"b9",eq:"b5", isPR:false},
   cr4:{name:"Plank",                g:"core",equip:"bodyweight",diff:"beginner",    sets:3,reps:"45s",w:0, rest:45, tip:"Squeeze everything. Hips level. Breathe.",timed:45,              video:"https://www.youtube.com/watch?v=pvIjsG5Svdk",bw:"cr4",eq:"cr4",isPR:false},
   cr5:{name:"Leg Raises",           g:"core",equip:"bodyweight",diff:"beginner",    sets:3,reps:"15",   w:0,  rest:45, tip:"Lower slowly — resist the drop.",                       video:"https://www.youtube.com/watch?v=JB2oyawG9KI",bw:"cr5",eq:"cr5",isPR:false},
   cr8:{name:"Bicycle Crunches",     g:"core",equip:"bodyweight",diff:"beginner",    sets:3,reps:"20",   w:0,  rest:45, tip:"Full rotation. Slow and controlled.",                   video:"https://www.youtube.com/watch?v=9FGilxCbdz8",bw:"cr8",eq:"cr8",isPR:false},
@@ -412,6 +424,7 @@ var NUTRITION = [
 
 // ── WORKOUT BUILDER ────────────────────────────────────────────────────────
 function buildExercise(ex, totalDone, d, intensity, diffKey, genderKey, goalKey) {
+  ex = applyLadder(ex);
   var gc = GENDER_CONFIG[genderKey];
   var inten = INTENSITY[intensity] || INTENSITY.moderate;
   var g = GOALS[goalKey] || GOALS.muscle;
@@ -441,6 +454,7 @@ function buildExercise(ex, totalDone, d, intensity, diffKey, genderKey, goalKey)
   var baseWt = stored !== undefined ? stored : Math.round((ex.w+prog)*d.weightMult/2.5)*2.5;
   var wt = Math.round(baseWt * inten.weightMult * g.weightMult / 2.5) * 2.5;
   if (isRecovery) wt = Math.round(baseWt * 0.6 / 2.5) * 2.5;
+  if (!ex.w) wt = 0; // bodyweight moves: no phantom "2.5 lbs" from the session-count progression
 
   var tempo = (diffKey==="advanced" && !isRecovery) ? d.tempo : "";
   return Object.assign({}, ex, {sets:sets, reps:reps, rest:rest, suggestedWeight:wt, tempo:tempo});
@@ -468,7 +482,12 @@ function getTopSkipped() {
     .filter(Boolean);
 }
 
-function buildWorkout(groups, totalDone, diffKey, intensityKey, locKey, recentIds, durationMins, genderKey, goalKey) {
+function buildWorkout() {
+  // de-duplicate in case a ladder level-up maps two picks onto the same exercise
+  var seen = {};
+  return buildWorkoutBase.apply(null, arguments).filter(function(e){ if (seen[e.id]) return false; seen[e.id]=1; return true; });
+}
+function buildWorkoutBase(groups, totalDone, diffKey, intensityKey, locKey, recentIds, durationMins, genderKey, goalKey) {
   recentIds = recentIds || [];
   durationMins = durationMins || 60;
   var loc = LOCATIONS[locKey] || LOCATIONS.gym;
@@ -531,6 +550,104 @@ function buildWorkout(groups, totalDone, diffKey, intensityKey, locKey, recentId
     }
   }
   return result.slice(0, dc.exercises);
+}
+
+// ── PERSONAL TRAINER: PROGRESSION, LADDERS, RE-ENTRY, BACKUP ───────────────
+// Bodyweight progression ladders: when a bodyweight move is rated Easy with all reps hit,
+// the next workout uses the harder variation (stored in ig_ladder, additive key).
+var LADDER = {c13:"c12", c12:"c15", c15:"c16", fb8:"c15",
+  l12:"l20", fb6:"l20", l20:"l21", l21:"l22",
+  l19:"l23", fb14:"l23", s10:"s14", fb11:"s14", b9:"b14", fb7:"b14"};
+var LOWER_IDS = {b1:1,b2:1,fb1:1,fb2:1,l6:1};
+function isLowerEx(e){ return e.g==="legs" || !!LOWER_IDS[e.id]; }
+function applyLadder(ex){
+  var lad = gs("ig_ladder",{}); var from = null; var guard = 0;
+  while (lad[ex.id] && EX[lad[ex.id]] && guard++ < 6) { from = from || ex; ex = findEx(lad[ex.id]); }
+  return from ? Object.assign({}, ex, {leveledFrom:from.id, leveledFromName:from.name}) : ex;
+}
+function repsTarget(e){ return parseInt(e.reps) || 0; }
+function todaySets(id){ return gs("ig_sets_"+id+"_"+TODAY, null) || []; }
+// Rule-based coach: returns {next, msg, missed, level}
+function coachExercise(e, prog){
+  var sets = todaySets(e.id).filter(function(s){ return s.done; });
+  var target = repsTarget(e);
+  var eff = e.effort || "right";
+  var repsOf = function(s){ return (s.reps===""||s.reps===undefined||s.reps===null) ? target : (parseInt(s.reps)||0); };
+  var hit = sets.length >= (e.sets||1) && sets.every(function(s){ return repsOf(s) >= target; });
+  var prev = prog[e.id];
+  var effTxt = {easy:"felt easy",right:"felt just right",hard:"felt hard"}[eff];
+  if (e.w > 0) {
+    var wsets = sets.filter(function(s){ return s.weight > 0; });
+    var cur = wsets.length ? Math.max.apply(null, wsets.map(function(s){ return s.weight; })) : (getW()[e.id]||e.suggestedWeight||e.w);
+    var r25 = function(x){ return Math.max(0, Math.round(x/2.5)*2.5); };
+    if (!sets.length) return {next:cur, msg:e.name+": "+cur+" lbs (no sets logged, same weight)", missed:false};
+    if (hit && eff==="easy") { var big = isLowerEx(e) ? 10 : 5; return {next:r25(cur+big), msg:e.name+": "+cur+" → "+r25(cur+big)+" lbs (all reps, "+effTxt+")", missed:false}; }
+    if (hit && eff==="right") { var sm = COMPOUND[e.id] ? 5 : 2.5; return {next:r25(cur+sm), msg:e.name+": "+cur+" → "+r25(cur+sm)+" lbs (all reps hit)", missed:false}; }
+    if (hit) return {next:cur, msg:e.name+": "+cur+" lbs, hold (it "+effTxt+")", missed:false};
+    if (eff==="hard" || (prev && prev.missed)) return {next:r25(cur*0.9), msg:e.name+": deload 10% → "+r25(cur*0.9)+" lbs (missed reps"+(prev&&prev.missed?" twice in a row":" and felt hard")+")", missed:true};
+    return {next:cur, msg:e.name+": "+cur+" lbs, repeat (a few reps short)", missed:true};
+  }
+  // bodyweight
+  if (!sets.length || e.timed) return null;
+  var nextId = LADDER[e.id];
+  if (hit && eff==="easy" && nextId && EX[nextId]) return {level:nextId, msg:"⬆ Level up: "+e.name+" → "+EX[nextId].name+" next time", missed:false};
+  if (hit && eff==="easy") return {msg:e.name+": add 2–3 reps or a slow 3s lowering next time", missed:false};
+  if (!hit) return {msg:e.name+": keep this variation, aim to hit every rep", missed:true};
+  return {msg:e.name+": solid, push for 1–2 more reps next time", missed:false};
+}
+function lastDoneGap(h){
+  var done = Object.keys(h).filter(function(d){ return d!==TODAY && h[d] && h[d].status==="done"; }).sort();
+  return done.length ? daysSince(done[done.length-1]) : null;
+}
+// Backup: every ig_* key in localStorage
+function allAppKeys(){ var ks=[]; try{ for(var i=0;i<localStorage.length;i++){ var k=localStorage.key(i); if(k&&k.indexOf("ig_")===0) ks.push(k); } }catch(e){} return ks.sort(); }
+function downloadFile(name, text, type){
+  var b = new Blob([text], {type:type}); var a = document.createElement("a");
+  a.href = URL.createObjectURL(b); a.download = name; document.body.appendChild(a); a.click();
+  setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+}
+function exportBackup(){
+  var data = {}; allAppKeys().forEach(function(k){ try{ data[k] = JSON.parse(localStorage.getItem(k)); }catch(e){ data[k] = localStorage.getItem(k); } });
+  downloadFile("personal-trainer-backup-"+TODAY+".json", JSON.stringify({app:"personal-trainer", format:1, exported:new Date().toISOString(), data:data}, null, 1), "application/json");
+}
+function importBackup(file){
+  var r = new FileReader();
+  r.onload = function(){
+    try {
+      var j = JSON.parse(r.result); var data = j && j.data;
+      if (!data || typeof data!=="object") throw 0;
+      var keys = Object.keys(data).filter(function(k){ return k.indexOf("ig_")===0; });
+      if (!keys.length) throw 0;
+      var n = data.ig_h6 ? Object.keys(data.ig_h6).length : 0;
+      if (!window.confirm("Restore backup with "+n+" logged days? This replaces the data on this device.")) return;
+      keys.forEach(function(k){ ss(k, data[k]); });
+      window.location.reload();
+    } catch(e) { alert("That file isn't a valid Personal Trainer backup."); }
+  };
+  r.readAsText(file);
+}
+function csvCell(v){ v = v===undefined||v===null ? "" : String(v); return /[",\n]/.test(v) ? '"'+v.replace(/"/g,'""')+'"' : v; }
+function exportCSV(){
+  var h = gs("ig_h6",{});
+  var rows = [["date","session","location","status","exercise","muscle","set","weight_lbs","reps","done","effort","energy","duration_min","notes"]];
+  Object.keys(h).sort().forEach(function(d){
+    var r = h[d]; if (!r) return;
+    var sess = r.sessMeta ? r.sessMeta.label : (r.sessionKey||"");
+    var exs = r.exercises || [];
+    if (!exs.length) rows.push([d,sess,r.locKey||"",r.status||"","","","","","","","",r.energy||"",r.duration||"",r.notes||""]);
+    exs.forEach(function(e){
+      var sets = gs("ig_sets_"+e.id+"_"+d, null);
+      if (sets && sets.length) sets.forEach(function(s,i){ rows.push([d,sess,r.locKey||"",r.status||"",e.name,e.g,i+1,s.weight,s.reps,s.done?"yes":"no",e.effort||"",r.energy||"",r.duration||"",r.notes||""]); });
+      else rows.push([d,sess,r.locKey||"",r.status||"",e.name,e.g,"",e.suggestedWeight!==undefined?e.suggestedWeight:e.w,e.reps,"",e.effort||"",r.energy||"",r.duration||"",r.notes||""]);
+    });
+  });
+  downloadFile("personal-trainer-log-"+TODAY+".csv", rows.map(function(r){ return r.map(csvCell).join(","); }).join("\n"), "text/csv");
+}
+function topWeightOn(e, d){
+  var sets = gs("ig_sets_"+e.id+"_"+d, null);
+  var ws = (sets||[]).filter(function(s){ return s.done && s.weight>0; }).map(function(s){ return s.weight; });
+  if (ws.length) return Math.max.apply(null, ws);
+  return e.suggestedWeight!==undefined ? e.suggestedWeight : e.w;
 }
 
 // ── ANALYTICS ─────────────────────────────────────────────────────────────
@@ -841,7 +958,7 @@ function ExCard(p) {
 
   // Set-by-set logging
   var setLogsS = useState(function(){
-    var saved = gs("ig_sets_"+ex.id, null);
+    var saved = gs("ig_sets_"+ex.id+"_"+(p.dateKey||TODAY), null);
     if (saved) return saved;
     var defaults = [];
     var numSets = ex.sets||3;
@@ -852,7 +969,7 @@ function ExCard(p) {
   });
   // Reset set logs when exercise changes (e.g. after rebuild)
   useEffect(function(){
-    var saved = gs("ig_sets_"+ex.id, null);
+    var saved = gs("ig_sets_"+ex.id+"_"+(p.dateKey||TODAY), null);
     if (saved) { setSetLogs(saved); return; }
     var defaults = [];
     for (var ri=0; ri<(ex.sets||3); ri++) {
@@ -885,6 +1002,7 @@ function ExCard(p) {
     var updated = setLogs.concat([{weight:last.weight, reps:"", done:false}]);
     setSetLogs(updated);
     ss("ig_sets_"+ex.id, updated);
+    ss("ig_sets_"+ex.id+"_"+TODAY, updated);
   }
 
   var doneCount = setLogs.filter(function(s){return s.done;}).length;
@@ -910,6 +1028,7 @@ function ExCard(p) {
               </div>
               {lastWeight && lastWeight!==wt && <div style={{fontSize:"11px",color:C.muted,marginTop:"3px"}}>Last time: {lastWeight} lbs</div>}
               {plateaued && <div style={{fontSize:"11px",color:C.yellow,marginTop:"5px"}}>⚠️ Plateau — try changing rep range or variation</div>}
+              {ex.leveledFrom && <div style={{fontSize:"11px",color:C.green,marginTop:"5px"}}>⬆ Leveled up from {ex.leveledFromName} {p.onUndoLevel && <button onClick={function(){p.onUndoLevel(idx, ex);}} style={{background:"none",border:"none",color:C.muted,fontSize:"11px",textDecoration:"underline",cursor:"pointer",fontFamily:"inherit",padding:0,marginLeft:"6px"}}>go back</button>}</div>}
             </div>
             <div style={{display:"flex",alignItems:"center",gap:"4px"}}>
               {onRemove && <button onClick={function(e){e.stopPropagation();onRemove();}} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",padding:"4px",fontSize:"16px",lineHeight:1}} title="Remove exercise">×</button>}
@@ -962,6 +1081,16 @@ function ExCard(p) {
                       }} style={{width:"32px",height:"32px",borderRadius:"8px",border:"1px solid "+(s.done?C.green:C.border),background:s.done?C.green+"22":"transparent",color:s.done?C.green:C.muted,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"14px"}}>{s.done?"✓":"○"}</button>
                     </div>
                   );
+                })}
+              </div>
+            )}
+            {/* Effort rating - drives next session's load / variation */}
+            {p.onEffort && (
+              <div style={{display:"flex",alignItems:"center",gap:"6px",marginTop:"8px"}}>
+                <span style={{fontSize:"10px",color:C.muted,textTransform:"uppercase",letterSpacing:"0.1em",fontFamily:"monospace",flexShrink:0}}>Felt</span>
+                {[["easy","Easy",C.green],["right","Just right",C.blue],["hard","Hard",C.yellow]].map(function(o){
+                  var on = ex.effort===o[0];
+                  return <button key={o[0]} onClick={function(){p.onEffort(ex.id, on?null:o[0]);}} style={{flex:1,padding:"6px 4px",borderRadius:"8px",border:"1px solid "+(on?o[2]:C.border),background:on?o[2]+"22":"transparent",color:on?o[2]:C.muted,fontSize:"11px",fontWeight:"700",cursor:"pointer",fontFamily:"inherit"}}>{o[1]}</button>;
                 })}
               </div>
             )}
@@ -1091,7 +1220,7 @@ function GenderOnboarding(p) {
   return (
     <div style={{minHeight:"100vh",background:C.bg,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"32px"}}>
       <div style={{fontSize:"48px",marginBottom:"16px"}}>🏋️</div>
-      <div style={{fontSize:"26px",fontWeight:"900",color:C.text,letterSpacing:"-0.5px",marginBottom:"8px",textAlign:"center"}}>Welcome to Iron Log</div>
+      <div style={{fontSize:"26px",fontWeight:"900",color:C.text,letterSpacing:"-0.5px",marginBottom:"8px",textAlign:"center"}}>Welcome to Personal Trainer</div>
       <div style={{fontSize:"14px",color:C.muted,marginBottom:"40px",textAlign:"center",lineHeight:1.6}}>One quick question to personalize your workouts, rep ranges, and training rotation.</div>
       <div style={{width:"100%",display:"flex",flexDirection:"column",gap:"12px"}}>
         {Object.keys(GENDER_CONFIG).map(function(key){
@@ -1286,6 +1415,17 @@ function SettingsScreen(p) {
           );
         })}
 
+        {/* Backup & export */}
+        <div style={{marginTop:"32px",borderTop:"1px solid "+C.border,paddingTop:"24px"}}>
+          <div style={{fontSize:"13px",fontWeight:"700",color:C.text,marginBottom:"6px"}}>Your data</div>
+          <div style={{fontSize:"12px",color:C.muted,marginBottom:"14px",lineHeight:1.5}}>Everything is stored only in this browser on this device. Export a backup now and then; import it to restore or move to a new phone.</div>
+          <div style={{display:"flex",gap:"8px",flexWrap:"wrap"}}>
+            <button id="pt-export-json" onClick={exportBackup} style={{flex:1,padding:"12px",borderRadius:"12px",border:"1px solid "+C.border,background:C.card,color:C.text,fontWeight:"700",fontSize:"13px",cursor:"pointer",fontFamily:"inherit"}}>⬇ Backup (JSON)</button>
+            <label style={{flex:1,padding:"12px",borderRadius:"12px",border:"1px solid "+C.border,background:C.card,color:C.text,fontWeight:"700",fontSize:"13px",cursor:"pointer",fontFamily:"inherit",textAlign:"center"}}>⬆ Restore<input id="pt-import-json" type="file" accept="application/json,.json" style={{display:"none"}} onChange={function(e){ if(e.target.files[0]) importBackup(e.target.files[0]); e.target.value=""; }}/></label>
+            <button id="pt-export-csv" onClick={exportCSV} style={{flex:1,padding:"12px",borderRadius:"12px",border:"1px solid "+C.border,background:C.card,color:C.text,fontWeight:"700",fontSize:"13px",cursor:"pointer",fontFamily:"inherit"}}>⬇ CSV</button>
+          </div>
+        </div>
+
         {/* Reset all data */}
         <div style={{marginTop:"32px",borderTop:"1px solid "+C.border,paddingTop:"24px"}}>
           <div style={{fontSize:"13px",fontWeight:"700",color:C.text,marginBottom:"6px"}}>Danger zone</div>
@@ -1311,6 +1451,12 @@ var useEffect = React.useEffect;
 
 function StatsTab(p) {
   var stats=p.stats, onSave=p.onSave, history=p.history;
+  var openDayS = useState(null);
+  var openDay=openDayS[0]; var setOpenDay=openDayS[1];
+  var editTickS = useState(0);
+  var bumpEdit=editTickS[1];
+  var progExS = useState(null);
+  var progEx=progExS[0]; var setProgEx=progExS[1];
   var secS = useState("body");
   var sec=secS[0]; var setSec=secS[1];
   var formS = useState({weight:"",date:TODAY});
@@ -1351,7 +1497,7 @@ function StatsTab(p) {
   return (
     <div>
       <div style={{display:"flex",gap:"6px",marginBottom:"20px"}}>
-        {[["body","Body"],["prs","PRs"],["log","Log"]].map(function(item){
+        {[["body","Body"],["prs","PRs"],["progress","Progress"],["log","Log"]].map(function(item){
           var k=item[0]; var l=item[1];
           return <button key={k} onClick={function(){setSec(k);}} style={Object.assign({},btnSt,{background:sec===k?C.accent:C.card,color:sec===k?"#fff":C.muted})}>{l}</button>;
         })}
@@ -1410,6 +1556,8 @@ function StatsTab(p) {
         </div>
       )}
 
+      {sec==="progress" && <ProgressSection history={history} progEx={progEx} setProgEx={setProgEx}/>}
+
       {sec==="log" && (
         <div>
           <div style={{display:"flex",gap:"8px",marginBottom:"20px"}}>
@@ -1423,7 +1571,7 @@ function StatsTab(p) {
             var df=data&&DIFFICULTY[data.diffKey];
             return (
               <div key={d} style={{padding:"13px 0",borderBottom:"1px solid "+C.border}}>
-                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                <div className="pt-log-row" onClick={function(){setOpenDay(openDay===d?null:d);}} style={{display:"flex",alignItems:"center",justifyContent:"space-between",cursor:"pointer"}}>
                   <div>
                     <div style={{fontSize:"14px",fontWeight:"700",color:d===TODAY?C.accent:C.text}}>{d===TODAY?"Today":fmt(d)}</div>
                     <div style={{fontSize:"12px",color:C.muted,marginTop:"2px",display:"flex",gap:"8px",flexWrap:"wrap"}}>
@@ -1435,12 +1583,92 @@ function StatsTab(p) {
                   </div>
                   <div style={{padding:"5px 12px",borderRadius:"20px",fontSize:"11px",fontWeight:"700",textTransform:"uppercase",background:done?"rgba(34,197,94,0.12)":skip?"rgba(255,77,77,0.1)":"rgba(255,255,255,0.04)",color:done?C.green:skip?C.red:C.muted}}>{done?"✓ Done":skip?"✗ Skip":"—"}</div>
                 </div>
-                {data&&data.notes && <div style={{fontSize:"12px",color:"#555",marginTop:"6px",fontStyle:"italic"}}>"{data.notes}"</div>}
+                {data&&data.notes && openDay!==d && <div style={{fontSize:"12px",color:"#555",marginTop:"6px",fontStyle:"italic"}}>"{data.notes}"</div>}
+                {openDay===d && data && (
+                  <div className="pt-log-edit" style={{marginTop:"10px",background:"#111",border:"1px solid "+C.border,borderRadius:"12px",padding:"12px"}}>
+                    {(data.exercises||[]).filter(function(e){return !e.isFinisher;}).map(function(e){
+                      var sets = gs("ig_sets_"+e.id+"_"+d, null);
+                      return (
+                        <div key={e.id} style={{marginBottom:"10px"}}>
+                          <div style={{fontSize:"13px",fontWeight:"700",color:C.text}}>{e.name}{e.effort && <span style={{fontSize:"10px",color:C.muted,marginLeft:"6px"}}>· {({easy:"easy",right:"just right",hard:"hard"})[e.effort]}</span>}</div>
+                          {sets && sets.length ? sets.map(function(s,i){
+                            function upd(field, val){ var cur = gs("ig_sets_"+e.id+"_"+d, []); cur[i] = Object.assign({}, cur[i], (function(){ var o={}; o[field]=val; return o; })()); ss("ig_sets_"+e.id+"_"+d, cur); bumpEdit(function(x){return x+1;}); }
+                            return (
+                              <div key={i} style={{display:"grid",gridTemplateColumns:"40px 1fr 1fr 34px",gap:"4px",alignItems:"center",marginTop:"4px"}}>
+                                <span style={{fontSize:"11px",color:C.muted,fontFamily:"monospace"}}>Set {i+1}</span>
+                                <input type="number" value={s.weight} onChange={function(ev){upd("weight", parseFloat(ev.target.value)||0);}} style={{background:"#1a1614",border:"1px solid "+C.border,borderRadius:"8px",padding:"6px",color:C.accent,fontSize:"12px",textAlign:"center",fontFamily:"inherit",width:"100%"}}/>
+                                <input type="number" value={s.reps} placeholder={e.reps} onChange={function(ev){upd("reps", ev.target.value);}} style={{background:"#1a1614",border:"1px solid "+C.border,borderRadius:"8px",padding:"6px",color:C.text,fontSize:"12px",textAlign:"center",fontFamily:"inherit",width:"100%"}}/>
+                                <button onClick={function(){upd("done", !s.done);}} style={{height:"28px",borderRadius:"8px",border:"1px solid "+(s.done?C.green:C.border),background:s.done?C.green+"22":"transparent",color:s.done?C.green:C.muted,cursor:"pointer"}}>{s.done?"✓":"○"}</button>
+                              </div>
+                            );
+                          }) : <div style={{fontSize:"11px",color:C.muted,marginTop:"2px"}}>{e.sets} × {e.reps}{e.w>0?" @ "+(e.suggestedWeight!==undefined?e.suggestedWeight:e.w)+" lbs":""} (no set log)</div>}
+                        </div>
+                      );
+                    })}
+                    <textarea defaultValue={data.notes||""} placeholder="Session notes" rows={2} onBlur={function(ev){ var n=Object.assign({},history); n[d]=Object.assign({},data,{notes:ev.target.value}); p.onSaveHistory(n); }} style={{width:"100%",background:"#1a1614",border:"1px solid "+C.border,borderRadius:"8px",padding:"8px",color:C.text,fontSize:"12px",fontFamily:"inherit",resize:"none",marginTop:"4px"}}/>
+                    <div style={{display:"flex",gap:"8px",marginTop:"8px"}}>
+                      {data.status!=="done" && <button onClick={function(){ var n=Object.assign({},history); n[d]=Object.assign({},data,{status:"done"}); p.onSaveHistory(n); }} style={{flex:1,padding:"9px",borderRadius:"10px",border:"1px solid "+C.green+"55",background:"transparent",color:C.green,fontWeight:"700",fontSize:"12px",cursor:"pointer",fontFamily:"inherit"}}>Mark done</button>}
+                      <button className="pt-del-day" onClick={function(){ if(window.confirm("Delete the "+(d===TODAY?"today":fmt(d))+" entry? This can't be undone.")) { setOpenDay(null); p.onDeleteDay(d); } }} style={{flex:1,padding:"9px",borderRadius:"10px",border:"1px solid rgba(255,77,77,0.4)",background:"rgba(255,77,77,0.08)",color:C.red,fontWeight:"700",fontSize:"12px",cursor:"pointer",fontFamily:"inherit"}}>🗑 Delete entry</button>
+                    </div>
+                  </div>
+                )}
               </div>
             );
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+// ── PROGRESS (per-exercise chart + sessions per week) ─────────────────────────
+function ProgressSection(p) {
+  var history = p.history;
+  var days = Object.keys(history).filter(function(d){ return history[d] && history[d].status==="done"; }).sort();
+  var byName = {};
+  days.forEach(function(d){ (history[d].exercises||[]).forEach(function(e){ if (e.w>0 && !e.isFinisher) { (byName[e.name] = byName[e.name] || []).push({d:d, y:topWeightOn(e,d)}); } }); });
+  var names = Object.keys(byName).sort();
+  var sel = p.progEx && byName[p.progEx] ? p.progEx : names[0];
+  var pts = sel ? byName[sel] : [];
+  var W=320, H=150, L=34, R=8, T=10, B=22;
+  var ys = pts.map(function(q){return q.y;});
+  var mn = ys.length?Math.min.apply(null,ys):0, mx = ys.length?Math.max.apply(null,ys):1;
+  if (mn===mx){ mn-=5; mx+=5; }
+  var X = function(i){ return pts.length===1 ? (L+W-R)/2 : L + i*(W-L-R)/(pts.length-1); };
+  var Y = function(v){ return T + (H-T-B)*(1-(v-mn)/(mx-mn)); };
+  var lab = function(d){ var x=new Date(d+"T12:00:00"); return (x.getMonth()+1)+"/"+x.getDate(); };
+  // sessions per week, last 8 weeks (Sunday start, same as WEEK_START)
+  var weeks = []; for (var i=7;i>=0;i--){ var w=new Date(WEEK_START+"T12:00:00"); w.setDate(w.getDate()-7*i); weeks.push(w.toISOString().split("T")[0]); }
+  var counts = weeks.map(function(ws, i){ var we = weeks[i+1] || "9999"; return days.filter(function(d){ return d>=ws && d<we; }).length; });
+  var cmax = Math.max(4, Math.max.apply(null, counts));
+  var card = {background:C.card,border:"1px solid "+C.border,borderRadius:"14px",padding:"16px",marginBottom:"16px"};
+  var lbl = {fontSize:"11px",color:C.muted,textTransform:"uppercase",letterSpacing:"0.1em",fontFamily:"monospace",marginBottom:"10px"};
+  return (
+    <div>
+      <div style={card}>
+        <div style={lbl}>Exercise progress (top set, lbs)</div>
+        {names.length===0 ? <div style={{fontSize:"13px",color:C.muted,padding:"20px 0",textAlign:"center"}}>Finish a session with weighted lifts to see progress.</div> : (
+          <div>
+            <select value={sel} onChange={function(e){p.setProgEx(e.target.value);}} style={{width:"100%",background:"#111",border:"1px solid "+C.border,borderRadius:"10px",padding:"10px 12px",color:C.text,fontSize:"13px",fontFamily:"inherit",marginBottom:"10px"}}>
+              {names.map(function(n){ return <option key={n} value={n}>{n}</option>; })}
+            </select>
+            <svg className="pt-chart" viewBox={"0 0 "+W+" "+H} style={{width:"100%",height:"auto",display:"block"}}>
+              {[0,1,2].map(function(k){ var v=mn+(mx-mn)*k/2; return <g key={k}><line x1={L} x2={W-R} y1={Y(v)} y2={Y(v)} stroke={C.border}/><text x={L-4} y={Y(v)+3} fill={C.muted} fontSize="9" textAnchor="end">{Math.round(v)}</text></g>; })}
+              <polyline points={pts.map(function(q,i){return X(i)+","+Y(q.y);}).join(" ")} fill="none" stroke={C.accent} strokeWidth="2.5" strokeLinejoin="round"/>
+              {pts.map(function(q,i){ return <circle key={i} cx={X(i)} cy={Y(q.y)} r="3.5" fill={C.accent}/>; })}
+              {pts.length>0 && <text x={X(0)} y={H-6} fill={C.muted} fontSize="9" textAnchor="middle">{lab(pts[0].d)}</text>}
+              {pts.length>1 && <text x={X(pts.length-1)} y={H-6} fill={C.muted} fontSize="9" textAnchor="middle">{lab(pts[pts.length-1].d)}</text>}
+            </svg>
+            <div style={{fontSize:"12px",color:C.muted,marginTop:"6px"}}>{pts.length} session{pts.length===1?"":"s"} · best {Math.max.apply(null,ys)} lbs{pts.length>1?" · "+(ys[ys.length-1]-ys[0]>=0?"+":"")+(ys[ys.length-1]-ys[0])+" lbs since first":""}</div>
+          </div>
+        )}
+      </div>
+      <div style={card}>
+        <div style={lbl}>Sessions per week</div>
+        <svg className="pt-chart" viewBox="0 0 320 110" style={{width:"100%",height:"auto",display:"block"}}>
+          {counts.map(function(c,i){ var bw=(320-16)/8, x=8+i*bw+bw*0.2, hgt=c/cmax*80; return <g key={i}><rect x={x} y={88-hgt} width={bw*0.6} height={Math.max(hgt,1)} rx="3" fill={c?C.accent:C.border}/><text x={x+bw*0.3} y={84-hgt} fill={C.muted} fontSize="9" textAnchor="middle">{c||""}</text><text x={x+bw*0.3} y={104} fill={C.muted} fontSize="8.5" textAnchor="middle">{lab(weeks[i])}</text></g>; })}
+        </svg>
+      </div>
     </div>
   );
 }
@@ -1721,6 +1949,23 @@ function App() {
     saveH(Object.assign({},history,{[TODAY]:Object.assign({},history[TODAY],{exercises:upd})}));
   }
 
+  function handleEffort(exId, v) {
+    var upd = exercises.map(function(e){ return e.id===exId ? Object.assign({},e,{effort:v||undefined}) : e; });
+    setExercises(upd);
+    saveH(Object.assign({},history,{[TODAY]:Object.assign({},history[TODAY],{exercises:upd})}));
+  }
+  function undoLevel(idx, ex) {
+    var lad = gs("ig_ladder",{});
+    Object.keys(lad).forEach(function(k){ if (lad[k]===ex.id) delete lad[k]; });
+    ss("ig_ladder", lad);
+    var orig = findEx(ex.leveledFrom) || FULLBODY_EX.filter(function(f){return f.id===ex.leveledFrom;})[0];
+    if (orig) swapEx(idx, orig);
+  }
+  function deleteDay(d) {
+    if (d===TODAY) { resetToday(); return; }
+    var n = Object.assign({}, history); delete n[d]; saveH(n);
+  }
+
   function handleExNote(exId, noteText) {
     var upd = exercises.map(function(e){ return e.id===exId ? Object.assign({},e,{note:noteText}) : e; });
     setExercises(upd);
@@ -1729,22 +1974,25 @@ function App() {
 
   function markDone() {
     var dur = startTime ? Math.round((Date.now()-startTime)/60000) : null;
-    var nw = exercises.filter(function(e){return e.w>0;}).map(function(e){
-      var setData = gs("ig_sets_"+e.id, null);
-      var doneSets = setData ? setData.filter(function(s){return s.done&&s.weight>0;}) : [];
-      var allRepsHit = doneSets.length>0 && doneSets.every(function(s){ return parseInt(s.reps)>0; });
-      var cur = doneSets.length>0 ? Math.max.apply(null,doneSets.map(function(s){return s.weight;})) : (getW()[e.id]||e.suggestedWeight||e.w);
-      var inc = COMPOUND[e.id]?5:2.5;
-      // Only advance weight if all sets were completed
-      var next = allRepsHit ? Math.round((cur+inc)/2.5)*2.5 : cur;
-      var l=getW(); l[e.id]=cur; saveW(l);
-      return e.name+": "+cur+" lbs"+(allRepsHit?" → "+next+" lbs next":" (repeat weight)");
+    // Rule-based coach: all reps + Easy -> bigger jump, Just right -> small jump, Hard -> hold,
+    // missed reps -> hold, missed + Hard (or missed twice in a row) -> 10% deload.
+    // Bodyweight moves rated Easy level up to a harder variation next time.
+    var prog = gs("ig_prog",{}); var lad = gs("ig_ladder",{}); var l = getW();
+    var nw = [];
+    exercises.filter(function(e){return !e.isFinisher;}).forEach(function(e){
+      var c = coachExercise(e, prog);
+      if (!c) return;
+      if (e.w>0) l[e.id] = c.next;
+      if (c.level) lad[e.id] = c.level;
+      prog[e.id] = {date:TODAY, missed:!!c.missed, effort:e.effort||"right"};
+      nw.push(c.msg);
     });
+    saveW(l); ss("ig_prog",prog); ss("ig_ladder",lad);
     // Auto-detect PRs from actual logged sets
     var autoPRs = [];
     exercises.filter(function(e){return e.w>0&&e.isPR;}).forEach(function(e){
-      var setData = gs("ig_sets_"+e.id, null);
-      var doneSets = setData ? setData.filter(function(s){return s.done&&s.weight>0;}) : [];
+      var setData = todaySets(e.id);
+      var doneSets = setData.filter(function(s){return s.done&&s.weight>0;});
       var bestW = doneSets.length ? Math.max.apply(null,doneSets.map(function(s){return s.weight;})) : (getW()[e.id]||e.suggestedWeight||e.w);
       var prevPRs = (stats.prs||[]).filter(function(p){return p.exercise===e.name;});
       var prevBest = prevPRs.length ? Math.max.apply(null,prevPRs.map(function(p){return p.weight;})) : 0;
@@ -1769,7 +2017,7 @@ function App() {
 
   function resetAllData() {
     if (!window.confirm("Reset everything? This deletes all your sessions, weights, PRs and settings. Cannot be undone.")) return;
-    var keys = ["ig_h6","ig_s6","ig_w5","ig_d3","ig_l3","ig_phase","ig_gender","ig_dur","ig_tips_seen","ig_intensity","ig_goal","ig_skips"];
+    var keys = ["ig_h6","ig_s6","ig_w5","ig_d3","ig_l3","ig_phase","ig_gender","ig_dur","ig_tips_seen","ig_intensity","ig_goal","ig_skips","ig_prog","ig_ladder"];
     keys.forEach(function(k){ try{ localStorage.removeItem(k); }catch(e){} });
     // Clear set logs
     var allKeys = [];
@@ -1790,14 +2038,14 @@ function App() {
   function shareSession() {
     var d = new Date().toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric"});
     var dur = (history[TODAY]&&history[TODAY].duration) ? history[TODAY].duration+" min" : "Session complete";
-    var lines = ["Iron Log - "+(sessMeta?sessMeta.emoji+" "+sessMeta.label:""), d, "Time: "+dur, ""];
+    var lines = ["Personal Trainer - "+(sessMeta?sessMeta.emoji+" "+sessMeta.label:""), d, "Time: "+dur, ""];
     exercises.filter(function(e){return !e.isFinisher;}).forEach(function(e){
       var w = e.w>0 ? " @ "+(getW()[e.id]||e.suggestedWeight||e.w)+" lbs" : "";
       lines.push("- "+e.name+" - "+e.sets+" sets x "+e.reps+w);
     });
-    lines.push(""); lines.push("Streak: "+streak+" days"); lines.push("Built with Iron Log");
+    lines.push(""); lines.push("Streak: "+streak+" days"); lines.push("Built with Personal Trainer");
     var text = lines.join("\n");
-    if (navigator.share) { navigator.share({title:"Iron Log Session",text:text}); }
+    if (navigator.share) { navigator.share({title:"Personal Trainer Session",text:text}); }
     else if (navigator.clipboard) { navigator.clipboard.writeText(text).then(function(){alert("Copied to clipboard!");}); }
     else { alert("Share not supported"); }
   }
@@ -1854,7 +2102,7 @@ function App() {
       {showTips && (
         <div style={{position:"fixed",inset:0,zIndex:998,background:"rgba(0,0,0,0.92)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"32px"}}>
           <div style={{fontSize:"40px",marginBottom:"12px"}}>🏋️</div>
-          <div style={{fontSize:"22px",fontWeight:"900",color:C.text,marginBottom:"6px",textAlign:"center"}}>Welcome to Iron Log</div>
+          <div style={{fontSize:"22px",fontWeight:"900",color:C.text,marginBottom:"6px",textAlign:"center"}}>Welcome to Personal Trainer</div>
           <div style={{fontSize:"13px",color:C.muted,marginBottom:"28px",textAlign:"center"}}>Here's how it works in 3 steps.</div>
           <div style={{width:"100%",display:"flex",flexDirection:"column",gap:"14px",marginBottom:"32px"}}>
             <div style={{background:C.card,border:"1px solid "+C.border,borderRadius:"14px",padding:"16px",display:"flex",gap:"14px",alignItems:"flex-start"}}>
@@ -1895,7 +2143,7 @@ function App() {
       <div style={{padding:"0 24px 14px",paddingTop:"max(52px, env(safe-area-inset-top, 52px))"}}>
         <div style={{fontSize:"10px",letterSpacing:"0.18em",color:C.muted,textTransform:"uppercase",fontFamily:"monospace"}}>{new Date().toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric"})}</div>
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginTop:"4px",flexWrap:"wrap",gap:"6px"}}>
-          <div style={{fontSize:"28px",fontWeight:"900",letterSpacing:"-1px"}}>Iron Log<span style={{color:C.accent}}>.</span></div>
+          <div style={{fontSize:"28px",fontWeight:"900",letterSpacing:"-1px"}}>Personal Trainer<span style={{color:C.accent}}>.</span></div>
           <div style={{display:"flex",gap:"5px",flexWrap:"wrap"}}>
             <button onClick={function(){setScreen("location");}} style={{background:C.card,border:"1px solid "+C.border,borderRadius:"20px",padding:"5px 10px",cursor:"pointer",fontSize:"11px",color:C.muted,fontFamily:"inherit",fontWeight:"600"}}>{LOCATIONS[locKey].emoji} {LOCATIONS[locKey].label.split(" ")[0]}</button>
             <button onClick={function(){setScreen("intensity");}} style={{background:C.card,border:"1px solid "+intensity.color+"55",borderRadius:"20px",padding:"5px 10px",cursor:"pointer",fontSize:"11px",color:intensity.color,fontFamily:"inherit",fontWeight:"700"}}>{intensity.emoji} {intensity.label}</button>
@@ -1926,6 +2174,14 @@ function App() {
                 <button onClick={function(){setTab("stats");}} style={{flexShrink:0,padding:"8px 14px",borderRadius:"10px",border:"none",background:C.blue,color:"#fff",fontWeight:"800",fontSize:"12px",cursor:"pointer",fontFamily:"inherit"}}>Log it</button>
               </div>
             )}
+
+            {/* Re-entry after time off */}
+            {(function(){ var gap = lastDoneGap(history); if (gap===null || gap<10 || intensityOverride || (todayRec&&todayRec.status==="done")) return null; return (
+              <div id="pt-reentry" style={{background:"rgba(234,179,8,0.08)",border:"1px solid rgba(234,179,8,0.3)",borderRadius:"14px",padding:"12px 16px",marginBottom:"14px"}}>
+                <div style={{fontSize:"13px",fontWeight:"700",color:C.yellow,marginBottom:"3px"}}>👋 Welcome back — {gap} days since your last session</div>
+                <div style={{fontSize:"12px",color:C.muted,lineHeight:1.5}}>Today is a lighter re-entry session (≈85% weight, higher reps) so you rebuild without wrecking yourself. Normal intensity returns after you're back in rhythm.</div>
+              </div>
+            ); })()}
 
             {/* Phase pill */}
             <div onClick={function(){setScreen("intensity");}} style={{background:intensity.color+"14",border:"1px solid "+intensity.color+"33",borderRadius:"12px",padding:"10px 14px",marginBottom:"14px",display:"flex",alignItems:"center",gap:"10px",cursor:"pointer"}}>
@@ -2084,7 +2340,7 @@ function App() {
                 {exercises.filter(function(e){return !e.isFinisher;}).map(function(ex,i){
                   var lastWt = getLastWeight(ex.id);
                   var lastSavedSets = getLastSets(ex.id);
-                  return <ExCard key={ex.id+i} ex={ex} idx={i} onSwap={swapEx} plateaued={checkPlateau(history,ex.id)} lastWeight={lastWt} onNoteChange={handleExNote} lastSets={lastSavedSets} onRemove={function(){removeExercise(exercises.indexOf(ex));}} />;
+                  return <ExCard key={ex.id+i} ex={ex} idx={exercises.indexOf(ex)} onSwap={swapEx} plateaued={checkPlateau(history,ex.id)} lastWeight={lastWt} onNoteChange={handleExNote} onEffort={handleEffort} onUndoLevel={undoLevel} lastSets={lastSavedSets} onRemove={function(){removeExercise(exercises.indexOf(ex));}} />;
                 })}
 
                 {/* Add exercise button */}
@@ -2143,7 +2399,7 @@ function App() {
         {tab==="volume" && <VolumeTab history={history}/>}
 
         {/* ══ STATS TAB ══ */}
-        {tab==="stats" && <StatsTab stats={stats} onSave={saveS} history={history}/>}
+        {tab==="stats" && <StatsTab stats={stats} onSave={saveS} history={history} onSaveHistory={saveH} onDeleteDay={deleteDay}/>}
 
       </div>
     </div>
@@ -2153,6 +2409,12 @@ function App() {
 ReactDOM.render(React.createElement(App, null), document.getElementById('root'));
 
 
+</script>
+<script>
+// Installable app + offline support (only when served over http/https, e.g. GitHub Pages)
+if ("serviceWorker" in navigator && /^https?:$/.test(location.protocol)) {
+  window.addEventListener("load", function(){ navigator.serviceWorker.register("sw.js").catch(function(){}); });
+}
 </script>
 </body>
 </html>
