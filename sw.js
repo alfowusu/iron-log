@@ -1,6 +1,6 @@
 // Personal Trainer service worker: works offline after the first visit.
 // Bump VERSION whenever index.html changes so phones pick up the new version.
-const VERSION = 'pt-v1';
+const VERSION = 'pt-v2';
 const CORE = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 const CDN = [
   'https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js',

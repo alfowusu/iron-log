@@ -4,7 +4,7 @@ Personal Trainer (formerly Iron Log) is a mobile-first training app in a single 
 
 ## Features
 - **AI Pick sessions** and manual sessions (Push, Pull, Legs, Upper, Full Body and more), or build your own.
-- **Training location:** Full Gym, Apartment Gym, or Home (bodyweight only).
+- **Training location:** Gym or Home (bodyweight only). Older "Apartment Gym" settings are moved to Gym automatically.
 - **Energy check-in and auto intensity** (High / Moderate / Light / Recovery).
 - **Re-entry:** after 10+ days off you get a lighter re-entry session instead of a "fresh, go heavy" one.
 - **Set-by-set logging** with a rest timer, form tips, videos and swaps ("Can't do this?").

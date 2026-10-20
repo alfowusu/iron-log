@@ -188,10 +188,22 @@ function getIntensity(history, energy) {
 var PHASES = INTENSITY;
 function getPhase(total) { return "moderate"; } // fallback, no longer used
 var LOCATIONS = {
-  gym:      {label:"Full Gym",      emoji:"🏋️",equip:{"barbell":1,"cable":1,"machine":1,"smith":1,"dumbbells":1,"bodyweight":1,"pullup":1}},
-  apartment:{label:"Apartment Gym", emoji:"🏢",equip:{"dumbbells":1,"cable":1,"machine":1,"bodyweight":1,"pullup":1}},
+  gym:      {label:"Gym",           emoji:"🏋️",equip:{"barbell":1,"cable":1,"machine":1,"smith":1,"dumbbells":1,"bodyweight":1,"pullup":1}},
   home:     {label:"Home",          emoji:"🏠",equip:{"bodyweight":1}}
 };
+// Migration: the old "apartment" location (dumbbells, cable, machine, pull-up bar) was equipment-based,
+// so it maps to Gym. Any other unknown value also falls back to Gym. Storage keys are unchanged.
+(function migrateLocations(){
+  try {
+    var l = gs("ig_l3", null);
+    if (l !== null && !LOCATIONS[l]) ss("ig_l3", "gym");
+    var h = gs("ig_h6", null), changed = false;
+    if (h && typeof h === "object") {
+      Object.keys(h).forEach(function(d){ if (h[d] && h[d].locKey && !LOCATIONS[h[d].locKey]) { h[d].locKey = "gym"; changed = true; } });
+      if (changed) ss("ig_h6", h);
+    }
+  } catch(e) {}
+})();
 var MUSCLES = {
   chest:    {label:"Chest",    color:"#f97316",target:12},
   back:     {label:"Back",     color:"#3b82f6",target:14},
@@ -1755,7 +1767,7 @@ function App() {
   var energy=energyS[0]; var setEnergy=energyS[1];
   var diffKeyS = useState(function(){return gs("ig_d3","beginner");});
   var diffKey=diffKeyS[0]; var setDiffKey=diffKeyS[1];
-  var locKeyS = useState(function(){return gs("ig_l3","gym");});
+  var locKeyS = useState(function(){var k=gs("ig_l3","gym"); return LOCATIONS[k]?k:"gym";});
   var locKey=locKeyS[0]; var setLocKey=locKeyS[1];
   var goalS = useState(function(){return gs("ig_goal","muscle");});
   var showPickerS = useState(false);
@@ -2145,7 +2157,7 @@ function App() {
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginTop:"4px",flexWrap:"wrap",gap:"6px"}}>
           <div style={{fontSize:"28px",fontWeight:"900",letterSpacing:"-1px"}}>Personal Trainer<span style={{color:C.accent}}>.</span></div>
           <div style={{display:"flex",gap:"5px",flexWrap:"wrap"}}>
-            <button onClick={function(){setScreen("location");}} style={{background:C.card,border:"1px solid "+C.border,borderRadius:"20px",padding:"5px 10px",cursor:"pointer",fontSize:"11px",color:C.muted,fontFamily:"inherit",fontWeight:"600"}}>{LOCATIONS[locKey].emoji} {LOCATIONS[locKey].label.split(" ")[0]}</button>
+            <button onClick={function(){setScreen("location");}} style={{background:C.card,border:"1px solid "+C.border,borderRadius:"20px",padding:"5px 10px",cursor:"pointer",fontSize:"11px",color:C.muted,fontFamily:"inherit",fontWeight:"600"}}>{LOCATIONS[locKey].emoji} {LOCATIONS[locKey].label}</button>
             <button onClick={function(){setScreen("intensity");}} style={{background:C.card,border:"1px solid "+intensity.color+"55",borderRadius:"20px",padding:"5px 10px",cursor:"pointer",fontSize:"11px",color:intensity.color,fontFamily:"inherit",fontWeight:"700"}}>{intensity.emoji} {intensity.label}</button>
             <button onClick={function(){setScreen("difficulty");}} style={{background:C.card,border:"1px solid "+diff.color+"55",borderRadius:"20px",padding:"5px 10px",cursor:"pointer",fontSize:"11px",color:diff.color,fontFamily:"inherit",fontWeight:"700"}}>{diff.emoji} {diff.label}</button>
             <button onClick={function(){setScreen("goal");}} style={{background:C.card,border:"1px solid "+(GOALS[goal]?GOALS[goal].color+"55":C.border),borderRadius:"20px",padding:"5px 10px",cursor:"pointer",fontSize:"11px",color:GOALS[goal]?GOALS[goal].color:C.muted,fontFamily:"inherit",fontWeight:"700"}}>{GOALS[goal]?GOALS[goal].emoji+"":""} {GOALS[goal]?GOALS[goal].label:"Goal"}</button>
