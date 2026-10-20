@@ -989,8 +989,22 @@ function BackBtn(p) {
   }, React.createElement(IBack, null), p.label || "Back");
 }
 function SubSheet(p) {
+  var loc = LOCATIONS[p.locKey] || LOCATIONS.gym;
+  var avail = function (e) {
+    return !!(e && loc.equip[e.equip]);
+  };
   var bw = p.ex.bw && p.ex.bw !== p.ex.id ? findEx(p.ex.bw) : null;
   var eq = p.ex.eq && p.ex.eq !== p.ex.id ? findEx(p.ex.eq) : null;
+  if (!avail(bw)) bw = null;
+  if (!avail(eq)) eq = null;
+  var skipIds = {};
+  skipIds[p.ex.id] = 1;
+  if (bw) skipIds[bw.id] = 1;
+  if (eq) skipIds[eq.id] = 1;
+  if (p.ex.leveledFrom) skipIds[p.ex.leveledFrom] = 1;
+  var more = Object.keys(EX).filter(function (id) {
+    return !skipIds[id] && EX[id].g === p.ex.g && avail(EX[id]);
+  }).slice(0, 6).map(findEx);
   var cardSt = {
     background: C.card,
     border: "1px solid " + C.border,
@@ -1131,7 +1145,44 @@ function SubSheet(p) {
       borderRadius: "12px",
       border: "1px solid " + C.border
     }
-  }, "No direct sub"))), React.createElement("button", {
+  }, "No direct sub"))), more.length > 0 && React.createElement("div", null, React.createElement("div", {
+    style: {
+      fontSize: "10px",
+      color: C.muted,
+      textTransform: "uppercase",
+      letterSpacing: "0.1em",
+      marginBottom: "8px",
+      fontFamily: "monospace"
+    }
+  }, "More options at ", loc.emoji, " ", loc.label), React.createElement("div", {
+    style: {
+      display: "grid",
+      gridTemplateColumns: "1fr 1fr",
+      gap: "8px",
+      marginBottom: "16px"
+    }
+  }, more.map(function (m) {
+    return React.createElement("button", {
+      key: m.id,
+      className: "pt-sub-more",
+      onClick: function () {
+        p.onSelect(m);
+      },
+      style: cardSt
+    }, React.createElement("div", {
+      style: {
+        fontWeight: "700",
+        fontSize: "13px",
+        color: C.text
+      }
+    }, m.name), React.createElement("div", {
+      style: {
+        fontSize: "11px",
+        color: C.muted,
+        marginTop: "3px"
+      }
+    }, m.equip));
+  }))), React.createElement("button", {
     onClick: p.onClose,
     style: {
       width: "100%",
@@ -1562,6 +1613,7 @@ function ExCard(p) {
     }
   }, "Superset \u2191")), showSub && React.createElement(SubSheet, {
     ex: ex,
+    locKey: p.locKey,
     onSelect: function (alt) {
       onSwap(idx, alt);
       setShowSub(false);
@@ -3538,7 +3590,8 @@ function StatsTab(p) {
       return s.key === (data && data.sessionKey);
     })[0];
     var done = data && data.status === "done";
-    var skip = data && data.status === "skipped";
+    var rest = data && data.isRest;
+    var skip = data && data.status === "skipped" && !rest;
     var df = data && DIFFICULTY[data.diffKey];
     return React.createElement("div", {
       key: d,
@@ -3576,7 +3629,7 @@ function StatsTab(p) {
       style: {
         color: df.color
       }
-    }, df.emoji), data && data.energy && React.createElement("span", null, "😴🤒😐💪🔥"[data.energy - 1]), data && data.duration && React.createElement("span", null, "\u23F1 ", data.duration, "min"))), React.createElement("div", {
+    }, df.emoji), data && data.energy && React.createElement("span", null, ["😴", "🤒", "😐", "💪", "🔥"][data.energy - 1]), data && data.duration && React.createElement("span", null, "\u23F1 ", data.duration, "min"))), React.createElement("div", {
       style: {
         padding: "5px 12px",
         borderRadius: "20px",
@@ -3585,8 +3638,9 @@ function StatsTab(p) {
         textTransform: "uppercase",
         background: done ? "rgba(34,197,94,0.12)" : skip ? "rgba(255,77,77,0.1)" : "rgba(255,255,255,0.04)",
         color: done ? C.green : skip ? C.red : C.muted
-      }
-    }, done ? "✓ Done" : skip ? "✗ Skip" : "—")), data && data.notes && openDay !== d && React.createElement("div", {
+      },
+      className: "pt-status"
+    }, done ? "✓ Done" : rest ? "🌿 Rest" : skip ? "✗ Skip" : "—")), data && data.notes && openDay !== d && React.createElement("div", {
       style: {
         fontSize: "12px",
         color: "#555",
@@ -4275,15 +4329,21 @@ function App() {
   var weightLoggedThisWeek = (stats.bodyLog || []).some(function (e) {
     return e.date >= WEEK_START;
   });
-  var showWeightReminder = !weightLoggedThisWeek;
+  var wDismissS = useState(gs("ig_wdismiss", null));
+  var wDismissed = wDismissS[0] === WEEK_START;
+  var setWDismiss = wDismissS[1];
+  var showWeightReminder = !weightLoggedThisWeek && !wDismissed && new Date().getDay() !== 0;
   useEffect(function () {
+    if (todayRec && todayRec.isRest && !todayRec.sessMeta) {
+      setWorkPhase("restlogged");
+    }
     if (todayRec && todayRec.exercises && todayRec.sessMeta) {
       setExercises(todayRec.exercises);
       setSessMeta(todayRec.sessMeta);
       setNotes(todayRec.notes || "");
       setStartTime(todayRec.startTime || null);
       if (todayRec.status === "done" || todayRec.status === "skipped") {
-        setWorkPhase(todayRec.isRest ? "rest" : "done");
+        setWorkPhase(todayRec.isRest ? "restlogged" : "done");
       } else if (todayRec.energy) {
         setEnergy(todayRec.energy);
         setWorkPhase("workout");
@@ -4403,7 +4463,7 @@ function App() {
     saveH(Object.assign({}, history, {
       [TODAY]: updated
     }));
-    setWorkPhase("done");
+    setWorkPhase("restlogged");
     setSessMeta({
       key: "rest",
       label: "Rest Day",
@@ -4645,6 +4705,36 @@ function App() {
       } catch (e) {}
     });
     window.location.reload();
+  }
+  function loggedSummary() {
+    var parts = [],
+      total = 0;
+    exercises.forEach(function (e) {
+      var n = todaySets(e.id).filter(function (s) {
+        return s.done;
+      }).length;
+      if (n) {
+        total += n;
+        parts.push(e.name + " ×" + n);
+      }
+    });
+    return {
+      total: total,
+      parts: parts
+    };
+  }
+  function requestChangeSession() {
+    var s = loggedSummary();
+    var isDone = todayRec && todayRec.status === "done";
+    if (!s.total && !isDone) {
+      resetToday();
+      return;
+    }
+    var what = sessMeta ? sessMeta.emoji + " " + sessMeta.label : "today's session";
+    setConfirm({
+      message: isDone ? "This removes your completed " + what + " from today's history" + (s.total ? " (" + s.total + " set" + (s.total > 1 ? "s" : "") + ": " + s.parts.join(", ") + ")" : "") + " and lets you pick a new session. Weights you've saved are kept." : "You've already logged " + s.total + " set" + (s.total > 1 ? "s" : "") + " (" + s.parts.join(", ") + "). Changing session removes them from today's " + what + ". Weights you've saved are kept.",
+      onConfirm: resetToday
+    });
   }
   function resetToday() {
     var n = Object.assign({}, history);
@@ -5381,6 +5471,7 @@ function App() {
       paddingBottom: "calc(100px + env(safe-area-inset-bottom, 0px))"
     }
   }, tab === "today" && React.createElement("div", null, showWeightReminder && React.createElement("div", {
+    id: "pt-weighin",
     style: {
       background: "rgba(96,165,250,0.08)",
       border: "1px solid rgba(96,165,250,0.25)",
@@ -5399,12 +5490,18 @@ function App() {
       color: C.blue,
       marginBottom: "2px"
     }
-  }, "\uD83D\uDCCA Monday check-in"), React.createElement("div", {
+  }, "\uD83D\uDCCA Weekly weigh-in"), React.createElement("div", {
     style: {
       fontSize: "12px",
       color: C.muted
     }
-  }, "Log your weight to track progress.")), React.createElement("button", {
+  }, "Log your weight once this week to track progress.")), React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: "6px",
+      flexShrink: 0
+    }
+  }, React.createElement("button", {
     onClick: function () {
       setTab("stats");
     },
@@ -5420,7 +5517,25 @@ function App() {
       cursor: "pointer",
       fontFamily: "inherit"
     }
-  }, "Log it")), blockDue(getBlock()) && workPhase !== "workout" && React.createElement("div", {
+  }, "Log it"), React.createElement("button", {
+    id: "pt-wdismiss",
+    "aria-label": "Dismiss weigh-in reminder",
+    onClick: function () {
+      ss("ig_wdismiss", WEEK_START);
+      setWDismiss(WEEK_START);
+    },
+    style: {
+      padding: "8px 10px",
+      borderRadius: "10px",
+      border: "1px solid " + C.border,
+      background: "transparent",
+      color: C.muted,
+      fontWeight: "700",
+      fontSize: "12px",
+      cursor: "pointer",
+      fontFamily: "inherit"
+    }
+  }, "\u2715"))), blockDue(getBlock()) && workPhase !== "workout" && React.createElement("div", {
     id: "pt-block-due",
     style: {
       background: "rgba(168,85,247,0.08)",
@@ -5861,7 +5976,7 @@ function App() {
       style: {
         fontSize: "18px"
       }
-    }, "😴🤒😐💪🔥"[n - 1]), React.createElement("span", {
+    }, ["😴", "🤒", "😐", "💪", "🔥"][n - 1]), React.createElement("span", {
       style: {
         fontSize: "9px",
         color: energy === n ? eColors[n] : C.muted,
@@ -5973,7 +6088,49 @@ function App() {
       cursor: "pointer",
       fontFamily: "inherit"
     }
-  }, "\u2713 Log as Rest Day"))), workPhase === "pick" && React.createElement("div", null, React.createElement("button", {
+  }, "\u2713 Log as Rest Day"))), workPhase === "restlogged" && React.createElement("div", {
+    id: "pt-rest-logged",
+    style: {
+      background: "rgba(255,255,255,0.03)",
+      border: "1px solid " + C.border,
+      borderRadius: "16px",
+      padding: "24px",
+      textAlign: "center",
+      marginBottom: "20px"
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: "40px",
+      marginBottom: "10px"
+    }
+  }, "\uD83C\uDF3F"), React.createElement("div", {
+    style: {
+      fontWeight: "900",
+      fontSize: "18px",
+      color: C.text
+    }
+  }, "Rest day logged"), React.createElement("div", {
+    style: {
+      fontSize: "13px",
+      color: C.muted,
+      marginTop: "6px",
+      lineHeight: 1.6
+    }
+  }, "Recovery is part of the plan. ", thisWeekCount(history), " of ", weeklyTarget(), " sessions this week."), React.createElement("button", {
+    onClick: resetToday,
+    style: {
+      marginTop: "14px",
+      padding: "10px 16px",
+      borderRadius: "12px",
+      border: "1px solid " + C.border,
+      background: "transparent",
+      color: C.muted,
+      cursor: "pointer",
+      fontFamily: "inherit",
+      fontWeight: "700",
+      fontSize: "13px"
+    }
+  }, "Train anyway")), workPhase === "pick" && React.createElement("div", null, React.createElement("button", {
     onClick: function () {
       setEnergy(null);
       setWorkPhase("energy");
@@ -6254,10 +6411,7 @@ function App() {
     }
   }, "Today's Session"), React.createElement("button", {
     onClick: function () {
-      setConfirm({
-        message: "Change session? Your current exercises will reset.",
-        onConfirm: resetToday
-      });
+      requestChangeSession();
     },
     style: {
       display: "flex",
@@ -6362,6 +6516,7 @@ function App() {
       key: ex.id + i,
       ex: ex,
       idx: exercises.indexOf(ex),
+      locKey: locKey,
       onSwap: swapEx,
       plateaued: checkPlateau(history, ex.id),
       lastWeight: lastWt,
@@ -6560,6 +6715,7 @@ function App() {
       key: ex.id + i,
       ex: ex,
       idx: i,
+      locKey: locKey,
       onSwap: swapEx,
       plateaued: false
     });
@@ -6606,7 +6762,8 @@ function App() {
       fontWeight: "700"
     }
   }, "\uD83D\uDCE4 Share Session"), React.createElement("button", {
-    onClick: resetToday,
+    id: "pt-done-change",
+    onClick: requestChangeSession,
     style: {
       width: "100%",
       marginTop: "10px",
