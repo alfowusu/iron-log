@@ -720,9 +720,15 @@ function applyBlock(exs, sessionKey, locKey, diffKey, totalDone, intensityKey, g
   var plan = b.plans[key] || {main:[], swaps:{}};
   plan.main = (plan.main||[]).filter(ok); plan.swaps = plan.swaps || {};
   if (plan.main.length < nMain) {
-    var score = function(e){ return (COMPOUND[baseId(e)] || e.isPR || COMPOUND[e.id]) ? 1 : 0; };
-    var cands = exs.slice().sort(function(a,c){ return score(c)-score(a); });
-    for (var i=0; i<cands.length && plan.main.length<nMain; i++) { var id = baseId(cands[i]); if (plan.main.indexOf(id)<0 && ok(id)) plan.main.push(id); }
+    // Candidates: compounds already in today's build, then other compounds for this session's muscle groups
+    // (within the user's difficulty), then whatever else was built.
+    var rank = {beginner:0, intermediate:1, advanced:2}, myRank = rank[diffKey]!==undefined ? rank[diffKey] : 0;
+    var sess = SESSIONS.filter(function(s){ return s.key===sessionKey; })[0], groups = sess ? sess.groups : [];
+    var isComp = function(id){ return !!COMPOUND[id]; };
+    var built = exs.map(baseId);
+    var extra = Object.keys(EX).filter(function(id){ return isComp(id) && groups.indexOf(EX[id].g)>=0 && (rank[EX[id].diff]||0) <= myRank; });
+    var cands = built.filter(isComp).concat(extra).concat(built);
+    for (var i=0; i<cands.length && plan.main.length<nMain; i++) { var id = cands[i]; if (plan.main.indexOf(id)<0 && ok(id)) plan.main.push(id); }
     b.plans[key] = plan; ss("ig_block", b);
   }
   var seen = {};
@@ -1950,11 +1956,10 @@ function App() {
       setStartTime(todayRec.startTime||null);
       if (todayRec.status==="done" || todayRec.status==="skipped") {
         setWorkPhase(todayRec.isRest?"restlogged":"done");
-      } else if (todayRec.energy) {
-        setEnergy(todayRec.energy);
-        setWorkPhase("workout");
       } else {
-        setWorkPhase("energy");
+        // a started session (energy rating is optional now) resumes where it was
+        if (todayRec.energy) setEnergy(todayRec.energy);
+        setWorkPhase("workout");
       }
     }
   }, []);
