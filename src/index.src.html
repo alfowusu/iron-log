@@ -764,6 +764,25 @@ function daysSince(ds){ return !ds ? 99 : Math.round((new Date(TODAY)-new Date(d
 function heatColor(d){ return d===0?"#ef4444":d===1?C.orange:d<=2?C.accent:d<=3?C.green:"#2a2420"; }
 function heatLabel(d){ return d===0?"Today":d===1?"Yesterday":d===99?"Not trained":d+"d ago"; }
 function streakMsg(s){ return s===0?"Start your streak today 💪":s<4?(s+" day"+(s>1?"s":"")+" — build the habit."):s<7?(s+" days — don't break the chain 🔥"):s===7?"Full week. Built different 🏆":(s+" days. Legendary 🏆"); }
+// Weekly streak: consecutive weeks (Sun–Sat, same as the Volume calendar) that met the weekly goal.
+// The current week counts once the goal is met; an unfinished current week never breaks the streak.
+function weeklyTarget(){ var t = gs("ig_wk_target", 3); return (typeof t==="number" && t>=1 && t<=7) ? t : 3; }
+function weekStartOf(ds){ var d = new Date(ds+"T12:00:00"); d.setDate(d.getDate()-d.getDay()); return localISO(d); }
+function prevWeek(ws){ var d = new Date(ws+"T12:00:00"); d.setDate(d.getDate()-7); return localISO(d); }
+function weekCounts(h){ var c = {}; Object.keys(h).forEach(function(d){ if (h[d] && h[d].status==="done") { var w = weekStartOf(d); c[w] = (c[w]||0)+1; } }); return c; }
+function thisWeekCount(h){ return weekCounts(h)[WEEK_START] || 0; }
+function buildWeekStreak(h){
+  var t = weeklyTarget(), c = weekCounts(h), s = 0, w = WEEK_START;
+  if ((c[w]||0) >= t) s++;
+  w = prevWeek(w);
+  while ((c[w]||0) >= t) { s++; w = prevWeek(w); }
+  return s;
+}
+function weekStreakMsg(s, x, t){
+  if (x >= t) return "Weekly goal hit 🎯 " + (s>1 ? s+" weeks running." : "Keep it going next week.");
+  var left = t - x;
+  return left + " more session" + (left>1?"s":"") + " to hit this week's goal" + (s>0 ? " and keep your "+s+"-week streak." : ".");
+}
 var eColors = ["","#ef4444","#f97316","#eab308",C.green,C.accent];
 </script>
 <script type="text/babel">
@@ -1533,7 +1552,7 @@ function StatsTab(p) {
   }
 
   var totalDone = Object.values(history).filter(function(d){return d&&d.status==="done";}).length;
-  var streak = buildStreak(history);
+  var streak = buildWeekStreak(history);
 
   return (
     <div>
@@ -1602,7 +1621,7 @@ function StatsTab(p) {
       {sec==="log" && (
         <div>
           <div style={{display:"flex",gap:"8px",marginBottom:"20px"}}>
-            {[{l:"Sessions",v:totalDone},{l:"Streak",v:streak+"d 🔥"}].map(function(s){ return <div key={s.l} style={{flex:1,background:C.card,borderRadius:"12px",padding:"14px",border:"1px solid "+C.border}}><div style={{fontSize:"20px",fontWeight:"900",color:C.accent}}>{s.v}</div><div style={{fontSize:"11px",color:C.muted,marginTop:"2px"}}>{s.l}</div></div>; })}
+            {[{l:"Sessions",v:totalDone},{l:"Week streak",v:streak+"w 🔥"},{l:"This week",v:thisWeekCount(history)+"/"+weeklyTarget()}].map(function(s){ return <div key={s.l} style={{flex:1,background:C.card,borderRadius:"12px",padding:"14px",border:"1px solid "+C.border}}><div style={{fontSize:"20px",fontWeight:"900",color:C.accent}}>{s.v}</div><div style={{fontSize:"11px",color:C.muted,marginTop:"2px"}}>{s.l}</div></div>; })}
           </div>
           {sorted2.length===0 ? <div style={{color:C.muted,textAlign:"center",padding:"40px 0"}}>No sessions yet.</div> : sorted2.map(function(entry){
             var d=entry[0]; var data=entry[1];
@@ -1828,9 +1847,11 @@ function App() {
   var warmupIdxS = useState(0);
   var warmupIdx=warmupIdxS[0]; var setWarmupIdx=warmupIdxS[1];
   var showTips=showTipsS[0]; var setShowTips=showTipsS[1];
+  var goalEditS = useState(false);
+  var goalEdit=goalEditS[0]; var setGoalEdit=goalEditS[1];
 
   var todayRec = history[TODAY];
-  var streak = buildStreak(history);
+  var streak = buildWeekStreak(history);
   var totalDone = Object.keys(history).filter(function(d){return history[d]&&history[d].status==="done";}).length;
   var intensityKey = intensityOverride || getIntensity(history, energy);
   var intensity = INTENSITY[intensityKey] || INTENSITY.moderate;
@@ -2084,7 +2105,7 @@ function App() {
       var w = e.w>0 ? " @ "+(getW()[e.id]||e.suggestedWeight||e.w)+" lbs" : "";
       lines.push("- "+e.name+" - "+e.sets+" sets x "+e.reps+w);
     });
-    lines.push(""); lines.push("Streak: "+streak+" days"); lines.push("Built with Personal Trainer");
+    lines.push(""); lines.push("This week: "+thisWeekCount(history)+" of "+weeklyTarget()+" · "+streak+"-week streak"); lines.push("Built with Personal Trainer");
     var text = lines.join("\n");
     if (navigator.share) { navigator.share({title:"Personal Trainer Session",text:text}); }
     else if (navigator.clipboard) { navigator.clipboard.writeText(text).then(function(){alert("Copied to clipboard!");}); }
@@ -2171,7 +2192,7 @@ function App() {
         <div onClick={function(){setCelebrating(false);}} style={{position:"fixed",inset:0,zIndex:999,background:"rgba(0,0,0,0.95)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"28px",gap:"14px"}}>
           <div style={{fontSize:"68px"}}>{newPRs.length>0?"🏅":"🏆"}</div>
           <div style={{fontSize:"22px",fontWeight:"900",color:C.accent}}>{newPRs.length>0?"New PR!":"Session Complete!"}</div>
-          <div style={{fontSize:"13px",color:"#888"}}>{streakMsg(streak)}</div>
+          <div style={{fontSize:"13px",color:"#888"}}>{weekStreakMsg(streak, thisWeekCount(history), weeklyTarget())}</div>
           {(history[TODAY]&&history[TODAY].duration) && <div style={{fontSize:"13px",color:C.muted}}>⏱ {history[TODAY].duration} min</div>}
           {newPRs.length>0 && <div style={{background:C.accent+"15",border:"1px solid "+C.accent+"44",borderRadius:"14px",padding:"14px 16px",width:"100%"}}><div style={{fontSize:"11px",color:C.accent,fontWeight:"700",textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:"8px",fontFamily:"monospace"}}>🏅 Personal Records</div>{newPRs.map(function(p,i){return <div key={i} style={{fontSize:"13px",color:C.text,padding:"4px 0"}}>{p.exercise} — <span style={{color:C.accent,fontWeight:"800"}}>{p.weight} lbs</span></div>;})}</div>}
           {nextWts.length>0 && <div style={{background:C.card,border:"1px solid "+C.border,borderRadius:"14px",padding:"16px",width:"100%"}}><div style={{fontSize:"11px",color:C.muted,textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:"10px",fontFamily:"monospace"}}>⚡ Next session targets</div>{nextWts.map(function(m,i){return <div key={i} style={{fontSize:"12px",color:C.text,padding:"4px 0",borderBottom:i<nextWts.length-1?"1px solid "+C.border:"none"}}>{m}</div>;})}</div>}
@@ -2237,15 +2258,28 @@ function App() {
               }
             </div>
 
-            {/* Streak */}
-            <div style={{background:streak>0?"linear-gradient(135deg,#1f1108,#2d1a0a)":C.card,border:"1px solid "+(streak>0?C.accent+"55":C.border),borderRadius:"18px",padding:"18px 20px",display:"flex",alignItems:"center",gap:"16px",marginBottom:"14px"}}>
-              <div style={{fontSize:"40px",lineHeight:1}}>{streak>0?"🔥":"💤"}</div>
-              <div>
-                <div style={{fontSize:"10px",letterSpacing:"0.14em",textTransform:"uppercase",color:C.muted,fontFamily:"monospace"}}>Streak</div>
-                <div style={{fontSize:"32px",fontWeight:"900",lineHeight:1,color:streak>0?C.accent:C.text}}>{streak} {streak===1?"day":"days"}</div>
-                <div style={{fontSize:"12px",color:C.muted,marginTop:"3px"}}>{streakMsg(streak)}</div>
+            {/* Weekly streak */}
+            {(function(){ var wk = thisWeekCount(history), tg = weeklyTarget(), hot = streak>0 || wk>=tg; return (
+            <div id="pt-week-card" style={{background:hot?"linear-gradient(135deg,#1f1108,#2d1a0a)":C.card,border:"1px solid "+(hot?C.accent+"55":C.border),borderRadius:"18px",padding:"16px 18px",marginBottom:"14px"}}>
+              <div style={{display:"flex",alignItems:"center",gap:"14px"}}>
+                <div style={{fontSize:"36px",lineHeight:1}}>{hot?"🔥":"🎯"}</div>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:"10px",letterSpacing:"0.14em",textTransform:"uppercase",color:C.muted,fontFamily:"monospace"}}>This week</div>
+                  <div style={{fontSize:"28px",fontWeight:"900",lineHeight:1.1,color:wk>=tg?C.accent:C.text}}>{wk} of {tg} <span style={{fontSize:"14px",color:C.muted,fontWeight:"700"}}>sessions</span></div>
+                  <div style={{display:"flex",gap:"5px",marginTop:"6px"}}>{Array.from({length:tg}).map(function(_,i){ return <div key={i} style={{width:"18px",height:"6px",borderRadius:"3px",background:i<wk?C.accent:"#3a302a"}}/>; })}</div>
+                </div>
+                <div style={{textAlign:"right"}}>
+                  <div style={{fontSize:"22px",fontWeight:"900",color:streak>0?C.accent:C.muted,lineHeight:1}}>{streak}</div>
+                  <div style={{fontSize:"10px",color:C.muted,marginTop:"2px"}}>week{streak===1?"":"s"} streak</div>
+                </div>
               </div>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginTop:"10px",gap:"8px"}}>
+                <div style={{fontSize:"12px",color:C.muted}}>{weekStreakMsg(streak, wk, tg)}</div>
+                <button id="pt-goal-btn" onClick={function(){setGoalEdit(!goalEdit);}} style={{flexShrink:0,background:"transparent",border:"1px solid "+C.border,borderRadius:"20px",padding:"4px 10px",color:C.muted,fontSize:"11px",cursor:"pointer",fontFamily:"inherit"}}>Goal {tg}/wk ✎</button>
+              </div>
+              {goalEdit && <div style={{display:"flex",gap:"6px",marginTop:"10px"}}>{[2,3,4,5,6].map(function(n){ return <button key={n} className="pt-goal-opt" onClick={function(){ss("ig_wk_target",n);setGoalEdit(false);}} style={{flex:1,padding:"8px 0",borderRadius:"10px",border:"1px solid "+(n===tg?C.accent:C.border),background:n===tg?C.accent+"22":"transparent",color:n===tg?C.accent:C.muted,fontWeight:"800",fontSize:"13px",cursor:"pointer",fontFamily:"inherit"}}>{n}</button>; })}</div>}
             </div>
+            ); })()}
 
             {/* Stats row */}
             <div style={{display:"flex",gap:"8px",marginBottom:"22px"}}>
@@ -2424,7 +2458,7 @@ function App() {
                   <div style={{fontSize:"40px",marginBottom:"10px"}}>{todayRec&&todayRec.status==="done"?"✅":"😴"}</div>
                   <div style={{fontWeight:"900",fontSize:"18px",color:C.text}}>{todayRec&&todayRec.status==="done"?"Session logged!":"Rest day logged"}</div>
                   {todayRec&&todayRec.duration && <div style={{fontSize:"13px",color:C.accent,marginTop:"4px",fontWeight:"700"}}>⏱ {todayRec.duration} min</div>}
-                  <div style={{fontSize:"13px",color:C.muted,marginTop:"6px"}}>{todayRec&&todayRec.status==="done"?streak+"-day streak 🔥":"Tomorrow is a fresh start."}</div>
+                  <div style={{fontSize:"13px",color:C.muted,marginTop:"6px"}}>{todayRec&&todayRec.status==="done"?(thisWeekCount(history)+" of "+weeklyTarget()+" this week · "+streak+"-week streak 🔥"):"Tomorrow is a fresh start."}</div>
                 </div>
                 <BackBtn onBack={function(){setWorkPhase("workout");}} label="Back to session"/>
                 {exercises.filter(function(e){return !e.isFinisher;}).map(function(ex,i){ return <ExCard key={ex.id+i} ex={ex} idx={i} onSwap={swapEx} plateaued={false}/>; })}
