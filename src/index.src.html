@@ -30,8 +30,11 @@ input::placeholder,textarea::placeholder{color:#444;}
 
 <script>
 // ── CONSTANTS ──────────────────────────────────────────────────────────────
-var TODAY = new Date().toISOString().split("T")[0];
-var WEEK_START = (function(){ var d=new Date(); d.setDate(d.getDate()-d.getDay()); return d.toISOString().split("T")[0]; })();
+// Dates are the browser's LOCAL calendar date (e.g. America/New_York), not UTC.
+// (Older versions used UTC, so evening sessions in the US were filed under the next day.)
+function localISO(d){ return d.getFullYear()+"-"+(d.getMonth()<9?"0":"")+(d.getMonth()+1)+"-"+(d.getDate()<10?"0":"")+d.getDate(); }
+var TODAY = localISO(new Date());
+var WEEK_START = (function(){ var d=new Date(); d.setDate(d.getDate()-d.getDay()); return localISO(d); })();
 function fmt(d){ return new Date(d+"T12:00:00").toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"}); }
 function fmtTime(secs){ var m=Math.floor(secs/60),s=secs%60; return m+":"+(s<10?"0":"")+s; }
 
@@ -40,6 +43,33 @@ function gs(k,fb){ try{ var v=localStorage.getItem(k); return v?JSON.parse(v):fb
 function ss(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)); }catch(e){} }
 function getW(){ return gs("ig_w5",{}); }
 function saveW(w){ ss("ig_w5",w); }
+
+// One-time-safe migration of UTC date keys to local dates.
+// A history entry whose startTime falls on an adjacent local date is moved to that date
+// (with its per-exercise set logs). Never overwrites an existing day, so nothing is lost or
+// duplicated; entries without a startTime (rest days, old skips) are left as they are.
+// Idempotent: once moved, the key matches the startTime's local date.
+(function migrateDatesToLocal(){
+  try {
+    var h = gs("ig_h6", null); if (!h || typeof h !== "object") return;
+    var moved = [];
+    Object.keys(h).sort().forEach(function(k){
+      var r = h[k]; if (!r || !r.startTime || !/^\d{4}-\d{2}-\d{2}$/.test(k)) return;
+      var loc = localISO(new Date(r.startTime));
+      if (loc === k || h[loc]) return;
+      var diff = Math.round((Date.parse(k+"T00:00:00Z") - Date.parse(loc+"T00:00:00Z"))/86400000);
+      if (Math.abs(diff) !== 1) return;
+      (r.exercises||[]).forEach(function(e){
+        var from = "ig_sets_"+e.id+"_"+k, to = "ig_sets_"+e.id+"_"+loc, v = localStorage.getItem(from);
+        if (v !== null && localStorage.getItem(to) === null) { localStorage.setItem(to, v); localStorage.removeItem(from); }
+      });
+      h[loc] = r; delete h[k]; moved.push(k+">"+loc);
+    });
+    if (moved.length) { ss("ig_h6", h); ss("ig_datefix", (gs("ig_datefix", [])||[]).concat(moved)); }
+  } catch(e) {}
+})();
+// If the app stays open past midnight, reload so "today" rolls over.
+document.addEventListener("visibilitychange", function(){ if (document.visibilityState==="visible" && localISO(new Date())!==TODAY) location.reload(); });
 
 // ── COLORS ─────────────────────────────────────────────────────────────────
 var C = {
@@ -1649,7 +1679,7 @@ function ProgressSection(p) {
   var Y = function(v){ return T + (H-T-B)*(1-(v-mn)/(mx-mn)); };
   var lab = function(d){ var x=new Date(d+"T12:00:00"); return (x.getMonth()+1)+"/"+x.getDate(); };
   // sessions per week, last 8 weeks (Sunday start, same as WEEK_START)
-  var weeks = []; for (var i=7;i>=0;i--){ var w=new Date(WEEK_START+"T12:00:00"); w.setDate(w.getDate()-7*i); weeks.push(w.toISOString().split("T")[0]); }
+  var weeks = []; for (var i=7;i>=0;i--){ var w=new Date(WEEK_START+"T12:00:00"); w.setDate(w.getDate()-7*i); weeks.push(localISO(w)); }
   var counts = weeks.map(function(ws, i){ var we = weeks[i+1] || "9999"; return days.filter(function(d){ return d>=ws && d<we; }).length; });
   var cmax = Math.max(4, Math.max.apply(null, counts));
   var card = {background:C.card,border:"1px solid "+C.border,borderRadius:"14px",padding:"16px",marginBottom:"16px"};
