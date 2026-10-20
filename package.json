@@ -1,0 +1,12 @@
+{
+  "name": "personal-trainer",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Personal Trainer static web app (GitHub Pages).",
+  "scripts": {
+    "build": "node build.js"
+  },
+  "devDependencies": {
+    "@babel/standalone": "7.23.2"
+  }
+}
