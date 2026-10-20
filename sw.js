@@ -1,6 +1,6 @@
 // Personal Trainer service worker: works offline after the first visit.
 // Bump VERSION whenever index.html changes so phones pick up the new version.
-const VERSION = 'pt-v3';
+const VERSION = 'pt-v4';
 const CORE = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png',
   './vendor/react.production.min.js', './vendor/react-dom.production.min.js'];
 self.addEventListener('install', e => {
