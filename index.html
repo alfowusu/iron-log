@@ -4254,6 +4254,10 @@ function App() {
   var setWarmupIdx = warmupIdxS[1];
   var showTips = showTipsS[0];
   var setShowTips = showTipsS[1];
+  var suggestedS = useState(function () {
+    return autoSession(gs("ig_h6", {}), null, gs("ig_gender", null));
+  });
+  var suggested = suggestedS[0];
   var blockTickS = useState(0);
   var blockTick = blockTickS[0];
   var setBlockTick = blockTickS[1];
@@ -4710,6 +4714,106 @@ function App() {
       color: C.text,
       fontFamily: "system-ui,-apple-system,sans-serif"
     };
+    if (screen === "settings") {
+      var rowS = {
+        width: "100%",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: "10px",
+        background: C.card,
+        border: "1px solid " + C.border,
+        borderRadius: "14px",
+        padding: "14px 16px",
+        marginBottom: "8px",
+        cursor: "pointer",
+        fontFamily: "inherit",
+        textAlign: "left"
+      };
+      var row = function (id, label, value, color, target) {
+        return React.createElement("button", {
+          key: id,
+          id: id,
+          onClick: function () {
+            setScreen(target);
+          },
+          style: rowS
+        }, React.createElement("span", {
+          style: {
+            fontSize: "14px",
+            fontWeight: "700",
+            color: C.text
+          }
+        }, label), React.createElement("span", {
+          style: {
+            fontSize: "12px",
+            fontWeight: "700",
+            color: color || C.muted
+          }
+        }, value, " \u203A"));
+      };
+      var tg = weeklyTarget();
+      return React.createElement("div", {
+        style: bg
+      }, React.createElement("div", {
+        style: {
+          padding: "52px 24px 80px"
+        }
+      }, React.createElement(BackBtn, {
+        onBack: screenProps.onBack
+      }), React.createElement("div", {
+        style: {
+          fontSize: "20px",
+          fontWeight: "900",
+          marginBottom: "16px"
+        }
+      }, "Settings"), row("pt-set-loc", "Location", LOCATIONS[locKey].emoji + " " + LOCATIONS[locKey].label, null, "location"), row("pt-set-intensity", "Intensity", intensity.emoji + " " + intensity.label, intensity.color, "intensity"), row("pt-set-diff", "Difficulty", diff.emoji + " " + diff.label, diff.color, "difficulty"), row("pt-set-goal", "Goal", GOALS[goal] ? GOALS[goal].emoji + " " + GOALS[goal].label : "Choose", GOALS[goal] ? GOALS[goal].color : null, "goal"), React.createElement("div", {
+        style: Object.assign({}, rowS, {
+          cursor: "default",
+          display: "block"
+        })
+      }, React.createElement("div", {
+        style: {
+          fontSize: "14px",
+          fontWeight: "700",
+          color: C.text,
+          marginBottom: "10px"
+        }
+      }, "Weekly goal ", React.createElement("span", {
+        style: {
+          fontSize: "12px",
+          color: C.muted,
+          fontWeight: "600"
+        }
+      }, "\xB7 sessions per week")), React.createElement("div", {
+        style: {
+          display: "flex",
+          gap: "6px"
+        }
+      }, [2, 3, 4, 5, 6].map(function (n) {
+        return React.createElement("button", {
+          key: n,
+          className: "pt-set-wk",
+          onClick: function () {
+            ss("ig_wk_target", n);
+            setGoalEdit(false);
+            setBlockTick(blockTick + 1);
+          },
+          style: {
+            flex: 1,
+            padding: "8px 0",
+            borderRadius: "10px",
+            border: "1px solid " + (n === tg ? C.accent : C.border),
+            background: n === tg ? C.accent + "22" : "transparent",
+            color: n === tg ? C.accent : C.muted,
+            fontWeight: "800",
+            fontSize: "13px",
+            cursor: "pointer",
+            fontFamily: "inherit"
+          }
+        }, n);
+      }))), row("pt-set-profile", "Profile & data", (GENDER_CONFIG[gender] ? GENDER_CONFIG[gender].emoji + " " : "") + "Backup · Export", null, "gender")));
+    }
     if (screen === "difficulty") return React.createElement("div", {
       style: bg
     }, React.createElement(SettingsScreen, {
@@ -5225,53 +5329,10 @@ function App() {
       fontWeight: "600"
     }
   }, LOCATIONS[locKey].emoji, " ", LOCATIONS[locKey].label), React.createElement("button", {
+    id: "pt-settings-btn",
+    "aria-label": "Settings",
     onClick: function () {
-      setScreen("intensity");
-    },
-    style: {
-      background: C.card,
-      border: "1px solid " + intensity.color + "55",
-      borderRadius: "20px",
-      padding: "5px 10px",
-      cursor: "pointer",
-      fontSize: "11px",
-      color: intensity.color,
-      fontFamily: "inherit",
-      fontWeight: "700"
-    }
-  }, intensity.emoji, " ", intensity.label), React.createElement("button", {
-    onClick: function () {
-      setScreen("difficulty");
-    },
-    style: {
-      background: C.card,
-      border: "1px solid " + diff.color + "55",
-      borderRadius: "20px",
-      padding: "5px 10px",
-      cursor: "pointer",
-      fontSize: "11px",
-      color: diff.color,
-      fontFamily: "inherit",
-      fontWeight: "700"
-    }
-  }, diff.emoji, " ", diff.label), React.createElement("button", {
-    onClick: function () {
-      setScreen("goal");
-    },
-    style: {
-      background: C.card,
-      border: "1px solid " + (GOALS[goal] ? GOALS[goal].color + "55" : C.border),
-      borderRadius: "20px",
-      padding: "5px 10px",
-      cursor: "pointer",
-      fontSize: "11px",
-      color: GOALS[goal] ? GOALS[goal].color : C.muted,
-      fontFamily: "inherit",
-      fontWeight: "700"
-    }
-  }, GOALS[goal] ? GOALS[goal].emoji + "" : "", " ", GOALS[goal] ? GOALS[goal].label : "Goal"), React.createElement("button", {
-    onClick: function () {
-      setScreen("gender");
+      setScreen("settings");
     },
     style: {
       background: C.card,
@@ -5279,12 +5340,12 @@ function App() {
       borderRadius: "20px",
       padding: "5px 10px",
       cursor: "pointer",
-      fontSize: "11px",
+      fontSize: "12px",
       color: C.muted,
       fontFamily: "inherit",
       fontWeight: "600"
     }
-  }, GENDER_CONFIG[gender] ? GENDER_CONFIG[gender].emoji : "⚙️")))), React.createElement("div", {
+  }, "\u2699\uFE0F")))), React.createElement("div", {
     style: {
       display: "flex",
       padding: "0 24px",
@@ -5679,6 +5740,73 @@ function App() {
       }
     }, s.l));
   })), workPhase === "energy" && React.createElement("div", {
+    id: "pt-start-card",
+    style: {
+      background: "linear-gradient(135deg,#2a1408,#1a0d06)",
+      border: "1px solid " + C.accent + "66",
+      borderRadius: "18px",
+      padding: "18px",
+      marginBottom: "14px"
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: "10px",
+      letterSpacing: "0.14em",
+      textTransform: "uppercase",
+      color: C.muted,
+      fontFamily: "monospace"
+    }
+  }, "Suggested for today"), React.createElement("div", {
+    style: {
+      fontSize: "20px",
+      fontWeight: "900",
+      color: C.text,
+      marginTop: "4px"
+    }
+  }, suggested.emoji, " ", suggested.label), React.createElement("div", {
+    id: "pt-start-preview",
+    style: {
+      fontSize: "12px",
+      color: C.muted,
+      marginTop: "4px",
+      lineHeight: 1.5
+    }
+  }, LOCATIONS[locKey].emoji, " ", LOCATIONS[locKey].label, " \xB7 ", (DURATION_CONFIG[duration] || DURATION_CONFIG[60]).label, " \xB7 ", intensity.label, " \xB7 ", diff.label), React.createElement("button", {
+    id: "pt-start-today",
+    onClick: function () {
+      startSess(suggested);
+    },
+    style: {
+      width: "100%",
+      marginTop: "14px",
+      padding: "17px",
+      borderRadius: "14px",
+      border: "none",
+      background: C.accent,
+      color: "#fff",
+      fontWeight: "900",
+      fontSize: "16px",
+      cursor: "pointer",
+      fontFamily: "inherit"
+    }
+  }, "\u25B6 Start today's session"), React.createElement("button", {
+    id: "pt-start-other",
+    onClick: function () {
+      setWorkPhase("pick");
+    },
+    style: {
+      width: "100%",
+      marginTop: "8px",
+      padding: "8px",
+      border: "none",
+      background: "transparent",
+      color: C.accent,
+      fontWeight: "700",
+      fontSize: "12px",
+      cursor: "pointer",
+      fontFamily: "inherit"
+    }
+  }, "Choose a different session or duration \u2192")), workPhase === "energy" && React.createElement("div", {
     style: {
       background: C.card,
       border: "1px solid " + C.border,
@@ -5693,13 +5821,19 @@ function App() {
       color: C.text,
       marginBottom: "6px"
     }
-  }, "How are you feeling today?"), React.createElement("div", {
+  }, "How are you feeling today? ", React.createElement("span", {
+    style: {
+      fontSize: "11px",
+      color: C.muted,
+      fontWeight: "600"
+    }
+  }, "(optional)")), React.createElement("div", {
     style: {
       fontSize: "13px",
       color: C.muted,
       marginBottom: "16px"
     }
-  }, "Calibrates your session intensity."), React.createElement("div", {
+  }, "Rate your energy to tune the session \u2014 or just tap Start above."), React.createElement("div", {
     style: {
       display: "flex",
       gap: "6px",

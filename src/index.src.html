@@ -1909,6 +1909,8 @@ function App() {
   var warmupIdxS = useState(0);
   var warmupIdx=warmupIdxS[0]; var setWarmupIdx=warmupIdxS[1];
   var showTips=showTipsS[0]; var setShowTips=showTipsS[1];
+  var suggestedS = useState(function(){ return autoSession(gs("ig_h6",{}), null, gs("ig_gender",null)); });
+  var suggested=suggestedS[0];
   var blockTickS = useState(0);
   var blockTick=blockTickS[0]; var setBlockTick=blockTickS[1];
   var goalEditS = useState(false);
@@ -2183,6 +2185,24 @@ function App() {
   if (screen!=="home") {
     var screenProps = {onBack:function(){setScreen("home");}};
     var bg = {minHeight:"100vh",background:C.bg,color:C.text,fontFamily:"system-ui,-apple-system,sans-serif"};
+    if (screen==="settings") {
+      var rowS = {width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",gap:"10px",background:C.card,border:"1px solid "+C.border,borderRadius:"14px",padding:"14px 16px",marginBottom:"8px",cursor:"pointer",fontFamily:"inherit",textAlign:"left"};
+      var row = function(id, label, value, color, target){ return <button key={id} id={id} onClick={function(){setScreen(target);}} style={rowS}><span style={{fontSize:"14px",fontWeight:"700",color:C.text}}>{label}</span><span style={{fontSize:"12px",fontWeight:"700",color:color||C.muted}}>{value} ›</span></button>; };
+      var tg = weeklyTarget();
+      return <div style={bg}><div style={{padding:"52px 24px 80px"}}>
+        <BackBtn onBack={screenProps.onBack}/>
+        <div style={{fontSize:"20px",fontWeight:"900",marginBottom:"16px"}}>Settings</div>
+        {row("pt-set-loc","Location",LOCATIONS[locKey].emoji+" "+LOCATIONS[locKey].label,null,"location")}
+        {row("pt-set-intensity","Intensity",intensity.emoji+" "+intensity.label,intensity.color,"intensity")}
+        {row("pt-set-diff","Difficulty",diff.emoji+" "+diff.label,diff.color,"difficulty")}
+        {row("pt-set-goal","Goal",GOALS[goal]?GOALS[goal].emoji+" "+GOALS[goal].label:"Choose",GOALS[goal]?GOALS[goal].color:null,"goal")}
+        <div style={Object.assign({},rowS,{cursor:"default",display:"block"})}>
+          <div style={{fontSize:"14px",fontWeight:"700",color:C.text,marginBottom:"10px"}}>Weekly goal <span style={{fontSize:"12px",color:C.muted,fontWeight:"600"}}>· sessions per week</span></div>
+          <div style={{display:"flex",gap:"6px"}}>{[2,3,4,5,6].map(function(n){ return <button key={n} className="pt-set-wk" onClick={function(){ss("ig_wk_target",n);setGoalEdit(false);setBlockTick(blockTick+1);}} style={{flex:1,padding:"8px 0",borderRadius:"10px",border:"1px solid "+(n===tg?C.accent:C.border),background:n===tg?C.accent+"22":"transparent",color:n===tg?C.accent:C.muted,fontWeight:"800",fontSize:"13px",cursor:"pointer",fontFamily:"inherit"}}>{n}</button>; })}</div>
+        </div>
+        {row("pt-set-profile","Profile & data",(GENDER_CONFIG[gender]?GENDER_CONFIG[gender].emoji+" ":"")+"Backup · Export",null,"gender")}
+      </div></div>;
+    }
     if (screen==="difficulty") return <div style={bg}><SettingsScreen type="difficulty" current={diffKey} totalDone={totalDone} onSelect={applyDiff} onBack={screenProps.onBack}/></div>;
     if (screen==="location")   return <div style={bg}><SettingsScreen type="location"   current={locKey}  onSelect={applyLoc}  onBack={screenProps.onBack}/></div>;
     if (screen==="intensity")      return <div style={bg}><SettingsScreen type="intensity"  current={intensityOverride} onSelect={applyIntensity} onBack={screenProps.onBack}/></div>;
@@ -2273,10 +2293,7 @@ function App() {
           <div style={{fontSize:"28px",fontWeight:"900",letterSpacing:"-1px"}}>Personal Trainer<span style={{color:C.accent}}>.</span></div>
           <div style={{display:"flex",gap:"5px",flexWrap:"wrap"}}>
             <button onClick={function(){setScreen("location");}} style={{background:C.card,border:"1px solid "+C.border,borderRadius:"20px",padding:"5px 10px",cursor:"pointer",fontSize:"11px",color:C.muted,fontFamily:"inherit",fontWeight:"600"}}>{LOCATIONS[locKey].emoji} {LOCATIONS[locKey].label}</button>
-            <button onClick={function(){setScreen("intensity");}} style={{background:C.card,border:"1px solid "+intensity.color+"55",borderRadius:"20px",padding:"5px 10px",cursor:"pointer",fontSize:"11px",color:intensity.color,fontFamily:"inherit",fontWeight:"700"}}>{intensity.emoji} {intensity.label}</button>
-            <button onClick={function(){setScreen("difficulty");}} style={{background:C.card,border:"1px solid "+diff.color+"55",borderRadius:"20px",padding:"5px 10px",cursor:"pointer",fontSize:"11px",color:diff.color,fontFamily:"inherit",fontWeight:"700"}}>{diff.emoji} {diff.label}</button>
-            <button onClick={function(){setScreen("goal");}} style={{background:C.card,border:"1px solid "+(GOALS[goal]?GOALS[goal].color+"55":C.border),borderRadius:"20px",padding:"5px 10px",cursor:"pointer",fontSize:"11px",color:GOALS[goal]?GOALS[goal].color:C.muted,fontFamily:"inherit",fontWeight:"700"}}>{GOALS[goal]?GOALS[goal].emoji+"":""} {GOALS[goal]?GOALS[goal].label:"Goal"}</button>
-            <button onClick={function(){setScreen("gender");}} style={{background:C.card,border:"1px solid "+C.border,borderRadius:"20px",padding:"5px 10px",cursor:"pointer",fontSize:"11px",color:C.muted,fontFamily:"inherit",fontWeight:"600"}}>{GENDER_CONFIG[gender]?GENDER_CONFIG[gender].emoji:"⚙️"}</button>
+            <button id="pt-settings-btn" aria-label="Settings" onClick={function(){setScreen("settings");}} style={{background:C.card,border:"1px solid "+C.border,borderRadius:"20px",padding:"5px 10px",cursor:"pointer",fontSize:"12px",color:C.muted,fontFamily:"inherit",fontWeight:"600"}}>⚙️</button>
           </div>
         </div>
       </div>
@@ -2367,9 +2384,18 @@ function App() {
 
             {/* ENERGY CHECK-IN */}
             {workPhase==="energy" && (
+              <div id="pt-start-card" style={{background:"linear-gradient(135deg,#2a1408,#1a0d06)",border:"1px solid "+C.accent+"66",borderRadius:"18px",padding:"18px",marginBottom:"14px"}}>
+                <div style={{fontSize:"10px",letterSpacing:"0.14em",textTransform:"uppercase",color:C.muted,fontFamily:"monospace"}}>Suggested for today</div>
+                <div style={{fontSize:"20px",fontWeight:"900",color:C.text,marginTop:"4px"}}>{suggested.emoji} {suggested.label}</div>
+                <div id="pt-start-preview" style={{fontSize:"12px",color:C.muted,marginTop:"4px",lineHeight:1.5}}>{LOCATIONS[locKey].emoji} {LOCATIONS[locKey].label} · {(DURATION_CONFIG[duration]||DURATION_CONFIG[60]).label} · {intensity.label} · {diff.label}</div>
+                <button id="pt-start-today" onClick={function(){startSess(suggested);}} style={{width:"100%",marginTop:"14px",padding:"17px",borderRadius:"14px",border:"none",background:C.accent,color:"#fff",fontWeight:"900",fontSize:"16px",cursor:"pointer",fontFamily:"inherit"}}>▶ Start today's session</button>
+                <button id="pt-start-other" onClick={function(){setWorkPhase("pick");}} style={{width:"100%",marginTop:"8px",padding:"8px",border:"none",background:"transparent",color:C.accent,fontWeight:"700",fontSize:"12px",cursor:"pointer",fontFamily:"inherit"}}>Choose a different session or duration →</button>
+              </div>
+            )}
+            {workPhase==="energy" && (
               <div style={{background:C.card,border:"1px solid "+C.border,borderRadius:"16px",padding:"20px",marginBottom:"20px"}}>
-                <div style={{fontSize:"16px",fontWeight:"800",color:C.text,marginBottom:"6px"}}>How are you feeling today?</div>
-                <div style={{fontSize:"13px",color:C.muted,marginBottom:"16px"}}>Calibrates your session intensity.</div>
+                <div style={{fontSize:"16px",fontWeight:"800",color:C.text,marginBottom:"6px"}}>How are you feeling today? <span style={{fontSize:"11px",color:C.muted,fontWeight:"600"}}>(optional)</span></div>
+                <div style={{fontSize:"13px",color:C.muted,marginBottom:"16px"}}>Rate your energy to tune the session — or just tap Start above.</div>
                 <div style={{display:"flex",gap:"6px",marginBottom:"12px"}}>
                   {[1,2,3,4,5].map(function(n){
                     return (
