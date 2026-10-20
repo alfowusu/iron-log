@@ -691,6 +691,68 @@ function topWeightOn(e, d){
   return e.suggestedWeight!==undefined ? e.suggestedWeight : e.w;
 }
 
+// ── TRAINING BLOCKS: consistent main lifts ─────────────────────────────────
+// For each location + session type, the main lifts stay fixed for a ~4-week block so the
+// weights can progress; accessories still rotate. Swaps made during the block are kept.
+// Stored in new key ig_block = {start, n, snooze, plans:{"gym|push":{main:[ids], swaps:{from:to}}}}.
+var BLOCK_WEEKS = 4;
+function findAnyEx(id){
+  if (EX[id]) return findEx(id);
+  var f = FULLBODY_EX.filter(function(x){ return x.id===id; })[0];
+  return f ? Object.assign({}, f) : null;
+}
+function getBlock(){
+  var b = gs("ig_block", null);
+  if (!b || !b.start || typeof b.plans!=="object") { b = {start:TODAY, n:1, plans:{}}; ss("ig_block", b); }
+  return b;
+}
+function blockWeek(b){ return Math.floor(daysSince(b.start)/7) + 1; }
+function blockDue(b){ return blockWeek(b) > BLOCK_WEEKS && !(b.snooze && b.snooze > TODAY); }
+function startNewBlock(){ var b = getBlock(); ss("ig_block", {start:TODAY, n:(b.n||1)+1, plans:{}}); }
+function snoozeBlock(){ var b = getBlock(); var d = new Date(TODAY+"T12:00:00"); d.setDate(d.getDate()+7); b.snooze = localISO(d); ss("ig_block", b); }
+function baseId(e){ return e.leveledFrom || e.id; }
+function applyBlock(exs, sessionKey, locKey, diffKey, totalDone, intensityKey, genderKey, goalKey){
+  if (!sessionKey || sessionKey==="custom" || sessionKey==="rest" || !exs.length) return exs;
+  var b = getBlock(), key = locKey+"|"+sessionKey, loc = LOCATIONS[locKey] || LOCATIONS.gym;
+  var d = DIFFICULTY[diffKey] || DIFFICULTY.beginner;
+  var nMain = Math.min(exs.length >= 5 ? 3 : 2, exs.length);
+  var ok = function(id){ var e = findAnyEx(id); return !!(e && loc.equip[e.equip]); };
+  var plan = b.plans[key] || {main:[], swaps:{}};
+  plan.main = (plan.main||[]).filter(ok); plan.swaps = plan.swaps || {};
+  if (plan.main.length < nMain) {
+    var score = function(e){ return (COMPOUND[baseId(e)] || e.isPR || COMPOUND[e.id]) ? 1 : 0; };
+    var cands = exs.slice().sort(function(a,c){ return score(c)-score(a); });
+    for (var i=0; i<cands.length && plan.main.length<nMain; i++) { var id = baseId(cands[i]); if (plan.main.indexOf(id)<0 && ok(id)) plan.main.push(id); }
+    b.plans[key] = plan; ss("ig_block", b);
+  }
+  var seen = {};
+  var mains = plan.main.slice(0, nMain).map(function(id){
+    var built = buildExercise(findAnyEx(id), totalDone, d, intensityKey, diffKey, genderKey, goalKey);
+    seen[built.id] = 1; seen[id] = 1;
+    return Object.assign(built, {isMain:true});
+  });
+  var acc = [];
+  exs.forEach(function(e){
+    var bid = baseId(e);
+    if (seen[bid] || seen[e.id]) return;
+    var to = plan.swaps[bid];
+    if (to && to!==bid && ok(to) && !seen[to]) e = buildExercise(findAnyEx(to), totalDone, d, intensityKey, diffKey, genderKey, goalKey);
+    if (seen[e.id]) return;
+    seen[e.id] = 1; seen[bid] = 1; acc.push(e);
+  });
+  return mains.concat(acc).slice(0, Math.max(exs.length, mains.length));
+}
+function recordBlockSwap(sessionKey, locKey, fromEx, alt){
+  if (!sessionKey || sessionKey==="custom" || sessionKey==="rest") return false;
+  var b = getBlock(), key = locKey+"|"+sessionKey, plan = b.plans[key];
+  if (!plan) return false;
+  var from = baseId(fromEx), i = (plan.main||[]).indexOf(from), isMain = i >= 0;
+  if (isMain) plan.main[i] = alt.id;
+  else if (alt.id !== from) { plan.swaps = plan.swaps || {}; plan.swaps[from] = alt.id; }
+  ss("ig_block", b);
+  return isMain;
+}
+
 // ── ANALYTICS ─────────────────────────────────────────────────────────────
 function buildStreak(h) {
   var done = Object.keys(h).filter(function(d){ return h[d]&&h[d].status==="done"; }).sort().reverse();
@@ -1079,7 +1141,7 @@ function ExCard(p) {
           <div style={{display:"flex",alignItems:"flex-start",gap:"12px"}}>
             <div style={{minWidth:"30px",height:"30px",borderRadius:"8px",background:numBg,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:"900",fontSize:"13px",color:"#000"}}>{idx+1}</div>
             <div style={{flex:1}}>
-              <div style={{fontWeight:"700",fontSize:"15px",color:C.text}}>{ex.name}</div>
+              <div style={{fontWeight:"700",fontSize:"15px",color:C.text}}>{ex.name}{ex.isMain && <span className="pt-main" style={{marginLeft:"8px",fontSize:"9px",fontWeight:"800",color:C.accent,border:"1px solid "+C.accent+"55",borderRadius:"10px",padding:"1px 6px",verticalAlign:"middle",letterSpacing:"0.05em"}}>MAIN LIFT</span>}</div>
               <div style={{fontSize:"11px",color:C.muted,marginTop:"2px"}}>{ex.equip}{ex.tempo?" · "+ex.tempo:""}</div>
               <div style={{fontSize:"13px",color:"#bbb",marginTop:"5px"}}>
                 {ex.sets} sets × {ex.reps}
@@ -1847,6 +1909,8 @@ function App() {
   var warmupIdxS = useState(0);
   var warmupIdx=warmupIdxS[0]; var setWarmupIdx=warmupIdxS[1];
   var showTips=showTipsS[0]; var setShowTips=showTipsS[1];
+  var blockTickS = useState(0);
+  var blockTick=blockTickS[0]; var setBlockTick=blockTickS[1];
   var goalEditS = useState(false);
   var goalEdit=goalEditS[0]; var setGoalEdit=goalEditS[1];
 
@@ -1918,7 +1982,7 @@ function App() {
     var recent = [];
     past.forEach(function(d){ (history[d]&&history[d].exercises||[]).forEach(function(e){recent.push(e.id);}); });
     var resolvedPhase = intensityKey;
-    var newExs = buildWorkout(sessMeta.groups, totalDone, newDiff||diffKey, intensityKey, newLoc||locKey, recent, duration, gender, goal);
+    var newExs = applyBlock(buildWorkout(sessMeta.groups, totalDone, newDiff||diffKey, intensityKey, newLoc||locKey, recent, duration, gender, goal), sessMeta.key, newLoc||locKey, newDiff||diffKey, totalDone, intensityKey, gender, goal);
     setExercises(newExs);
     var updated = Object.assign({}, history[TODAY]||{}, {exercises:newExs});
     saveH(Object.assign({}, history, {[TODAY]:updated}));
@@ -1971,7 +2035,7 @@ function App() {
     var recent = [];
     past.forEach(function(d){ (history[d]&&history[d].exercises||[]).forEach(function(e){recent.push(e.id);}); });
     var dc = DURATION_CONFIG[duration]||DURATION_CONFIG[60];
-    var exs = buildWorkout(s.groups, totalDone, diffKey, intensityKey, locKey, recent, duration, gender, goal);
+    var exs = applyBlock(buildWorkout(s.groups, totalDone, diffKey, intensityKey, locKey, recent, duration, gender, goal), s.key, locKey, diffKey, totalDone, intensityKey, gender, goal);
     var finishers = dc.finisher ? pickFinishers(s.key, totalDone) : [];
     var allExs = exs.concat(finishers);
     var t = Date.now();
@@ -2002,11 +2066,12 @@ function App() {
   }
 
   function swapEx(idx, alt) {
+    var wasMain = exercises[idx] && sessMeta ? recordBlockSwap(sessMeta.key, locKey, exercises[idx], alt) : false;
     var stored = getW()[alt.id];
     var prog = Math.floor(totalDone/4)*(COMPOUND[alt.id]?5:2.5);
     var d = DIFFICULTY[diffKey]||DIFFICULTY.beginner;
     var nw = stored!==undefined ? stored : Math.round((alt.w+prog)*d.weightMult/2.5)*2.5;
-    var upd = exercises.map(function(e,i){ return i===idx ? Object.assign({},alt,{suggestedWeight:nw,sets:e.sets,reps:e.reps,rest:e.rest}) : e; });
+    var upd = exercises.map(function(e,i){ return i===idx ? Object.assign({},alt,{suggestedWeight:nw,sets:e.sets,reps:e.reps,rest:e.rest,isMain:wasMain||undefined}) : e; });
     setExercises(upd);
     saveH(Object.assign({},history,{[TODAY]:Object.assign({},history[TODAY],{exercises:upd})}));
   }
@@ -2237,6 +2302,18 @@ function App() {
               </div>
             )}
 
+            {/* New training block suggestion */}
+            {blockDue(getBlock()) && workPhase!=="workout" && (
+              <div id="pt-block-due" style={{background:"rgba(168,85,247,0.08)",border:"1px solid rgba(168,85,247,0.3)",borderRadius:"14px",padding:"12px 16px",marginBottom:"14px"}}>
+                <div style={{fontSize:"13px",fontWeight:"700",color:C.purple,marginBottom:"3px"}}>🔁 Block {getBlock().n||1} done ({BLOCK_WEEKS}+ weeks)</div>
+                <div style={{fontSize:"12px",color:C.muted,lineHeight:1.5,marginBottom:"10px"}}>Time for a new block with fresh main lifts. Your weights and history stay.</div>
+                <div style={{display:"flex",gap:"8px"}}>
+                  <button id="pt-new-block" onClick={function(){startNewBlock();setBlockTick(blockTick+1);}} style={{flex:1,padding:"9px",borderRadius:"10px",border:"none",background:C.purple,color:"#fff",fontWeight:"800",fontSize:"12px",cursor:"pointer",fontFamily:"inherit"}}>Start new block</button>
+                  <button onClick={function(){snoozeBlock();setBlockTick(blockTick+1);}} style={{flex:1,padding:"9px",borderRadius:"10px",border:"1px solid "+C.border,background:"transparent",color:C.muted,fontWeight:"700",fontSize:"12px",cursor:"pointer",fontFamily:"inherit"}}>Keep going a week</button>
+                </div>
+              </div>
+            )}
+
             {/* Re-entry after time off */}
             {(function(){ var gap = lastDoneGap(history); if (gap===null || gap<10 || intensityOverride || (todayRec&&todayRec.status==="done")) return null; return (
               <div id="pt-reentry" style={{background:"rgba(234,179,8,0.08)",border:"1px solid rgba(234,179,8,0.3)",borderRadius:"14px",padding:"12px 16px",marginBottom:"14px"}}>
@@ -2394,6 +2471,7 @@ function App() {
                     <button onClick={function(){setConfirm({message:"Change session? Your current exercises will reset.",onConfirm:resetToday});}} style={{display:"flex",alignItems:"center",gap:"5px",background:"rgba(255,255,255,0.07)",border:"1px solid "+C.border,borderRadius:"20px",padding:"5px 12px",cursor:"pointer",fontSize:"12px",color:C.muted,fontFamily:"inherit",fontWeight:"700"}}>↺ Change</button>
                   </div>
                   <div style={{fontSize:"20px",fontWeight:"900",color:C.text,marginTop:"4px"}}>{sessMeta.emoji} {sessMeta.label}</div>
+                  {sessMeta.key!=="custom" && (function(){ var b=getBlock(); var w=blockWeek(b); return <div id="pt-block-info" style={{fontSize:"11px",color:C.muted,marginTop:"3px"}}>Block {b.n||1} · week {Math.min(w,BLOCK_WEEKS+1)}{w>BLOCK_WEEKS?"+":""} of {BLOCK_WEEKS} · main lifts stay the same so you can add weight</div>; })()}
                   <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginTop:"6px"}}>
                     <span style={{fontSize:"11px",color:C.muted}}>{LOCATIONS[locKey].emoji} {LOCATIONS[locKey].label} · {intensity.emoji} {intensity.label}</span>
                     <span style={{fontSize:"13px",fontWeight:"800",color:elapsed>3600?C.red:elapsed>2700?C.orange:C.accent,fontFamily:"monospace"}}>⏱ {fmtTime(elapsed)}</span>
