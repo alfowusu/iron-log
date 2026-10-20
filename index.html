@@ -648,9 +648,12 @@ function downloadFile(name, text, type){
   a.href = URL.createObjectURL(b); a.download = name; document.body.appendChild(a); a.click();
   setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 1000);
 }
-function exportBackup(){
+function buildBackup(){
   var data = {}; allAppKeys().forEach(function(k){ try{ data[k] = JSON.parse(localStorage.getItem(k)); }catch(e){ data[k] = localStorage.getItem(k); } });
-  downloadFile("personal-trainer-backup-"+TODAY+".json", JSON.stringify({app:"personal-trainer", format:1, exported:new Date().toISOString(), data:data}, null, 1), "application/json");
+  return {app:"personal-trainer", format:1, exported:new Date().toISOString(), data:data};
+}
+function exportBackup(){
+  downloadFile("personal-trainer-backup-"+TODAY+".json", JSON.stringify(buildBackup(), null, 1), "application/json");
 }
 function importBackup(file){
   var r = new FileReader();
@@ -671,7 +674,7 @@ function importBackup(file){
 function csvCell(v){ v = v===undefined||v===null ? "" : String(v); return /[",\n]/.test(v) ? '"'+v.replace(/"/g,'""')+'"' : v; }
 function exportCSV(){
   var h = gs("ig_h6",{});
-  var rows = [["date","session","location","status","exercise","muscle","set","weight_lbs","reps","done","effort","energy","duration_min","notes"]];
+  var rows = [];
   Object.keys(h).sort().forEach(function(d){
     var r = h[d]; if (!r) return;
     var sess = r.sessMeta ? r.sessMeta.label : (r.sessionKey||"");
@@ -683,6 +686,18 @@ function exportCSV(){
       else rows.push([d,sess,r.locKey||"",r.status||"",e.name,e.g,"",e.suggestedWeight!==undefined?e.suggestedWeight:e.w,e.reps,"",e.effort||"",r.energy||"",r.duration||"",r.notes||""]);
     });
   });
+  rows.forEach(function(r){ r.push("strength","","","","","","",""); });
+  // cardio sessions
+  getCardio().forEach(function(c){ var t = CARDIO_TYPES[c.type]||CARDIO_TYPES.other;
+    rows.push([c.date,"Cardio","","done",t.label,"","","","","",c.effort||"","",c.min||"",c.note||"","cardio",c.mi!=null?c.mi:"","","","","","",""]); });
+  // body: weight + measurements, one row per date
+  var body = {};
+  ((gs("ig_s6",{}).bodyLog)||[]).forEach(function(b){ (body[b.date]=body[b.date]||{}).weight = b.weight; });
+  getMeas().forEach(function(m){ var o = body[m.date]=body[m.date]||{}; MEASURES.forEach(function(k){ if (m[k]!=null) o[k]=m[k]; }); });
+  Object.keys(body).forEach(function(d){ var o = body[d];
+    rows.push([d,"Body","","","","","","","","","","","","","body",""].concat(MEASURES.map(function(k){ return o[k]!=null?o[k]:""; })).concat([o.weight!=null?o.weight:""])); });
+  rows.sort(function(a,b){ return a[0]<b[0]?-1:a[0]>b[0]?1:0; });
+  rows.unshift(["date","session","location","status","exercise","muscle","set","weight_lbs","reps","done","effort","energy","duration_min","notes","kind","distance_mi","waist_in","chest_in","hips_in","arms_in","thighs_in","body_weight_lbs"]);
   downloadFile("personal-trainer-log-"+TODAY+".csv", rows.map(function(r){ return r.map(csvCell).join(","); }).join("\n"), "text/csv");
 }
 function topWeightOn(e, d){
@@ -691,6 +706,144 @@ function topWeightOn(e, d){
   if (ws.length) return Math.max.apply(null, ws);
   return e.suggestedWeight!==undefined ? e.suggestedWeight : e.w;
 }
+
+// ── CARDIO & BODY MEASUREMENTS (new keys ig_cardio, ig_cardio_counts, ig_meas) ──
+var CARDIO_TYPES = {run:{label:"Run",emoji:"🏃"}, walk:{label:"Walk",emoji:"🚶"}, bike:{label:"Bike",emoji:"🚴"}, row:{label:"Row",emoji:"🚣"}, other:{label:"Other",emoji:"⚡"}};
+var CARDIO_EFFORT = {easy:{label:"Easy",color:"#22c55e"}, moderate:{label:"Moderate",color:"#eab308"}, hard:{label:"Hard",color:"#ff4d4d"}};
+var MEASURES = ["waist","chest","hips","arms","thighs"];
+var MEASURE_LABEL = {waist:"Waist",chest:"Chest",hips:"Hips",arms:"Arms",thighs:"Thighs"};
+function getCardio(){ var c = gs("ig_cardio", []); return Array.isArray(c) ? c : []; }
+function getMeas(){ var m = gs("ig_meas", []); return Array.isArray(m) ? m : []; }
+function cardioCounts(){ return gs("ig_cardio_counts", true) !== false; }
+function cardioOn(d){ return getCardio().filter(function(c){ return c.date===d; }); }
+function cardioWeekMinutes(ws){ var we = (function(){ var x=new Date(ws+"T12:00:00"); x.setDate(x.getDate()+7); return localISO(x); })();
+  return getCardio().filter(function(c){ return c.date>=ws && c.date<we; }).reduce(function(s,c){ return s+(parseFloat(c.min)||0); }, 0); }
+
+// ── CLOUD BACKUP to a private GitHub repo ─────────────────────────────────────
+// The token lives only in this browser (key pt_gh_token, deliberately NOT prefixed ig_ so it is
+// never included in backups/exports). Status lives in pt_cloud. Syncs never block the UI.
+var CLOUD_REPO_DEFAULT = "alfowusu/trainer-data", CLOUD_PATH = "data/backup.json";
+var CLOUD_OPEN_GAP = 5*60*1000, CLOUD_RETRY = 2*60*1000;
+function cloudToken(){ try { return localStorage.getItem("pt_gh_token") || ""; } catch(e){ return ""; } }
+function cloudState(){ var s = gs("pt_cloud", {}); return (s && typeof s==="object") ? s : {}; }
+function setCloudState(patch){ var s = Object.assign({}, cloudState(), patch); ss("pt_cloud", s); try { window.dispatchEvent(new Event("pt-cloud")); } catch(e){} return s; }
+function cloudRepo(){ return cloudState().repo || CLOUD_REPO_DEFAULT; }
+function cloudConnect(token, repo){
+  try { localStorage.setItem("pt_gh_token", token.trim()); } catch(e){}
+  setCloudState({repo:(repo||CLOUD_REPO_DEFAULT).trim(), lastSync:null, lastError:null, pending:true, conflict:null, firstSync:true});
+  return cloudSync({});
+}
+function cloudDisconnect(){ try { localStorage.removeItem("pt_gh_token"); } catch(e){} ss("pt_cloud", {repo:cloudRepo()}); try { window.dispatchEvent(new Event("pt-cloud")); } catch(e){} }
+function b64encodeUtf8(s){ var bytes = new TextEncoder().encode(s), bin = ""; for (var i=0;i<bytes.length;i+=0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i+0x8000)); return btoa(bin); }
+function ghContents(method, body, raw){
+  var hdr = {"Authorization":"Bearer "+cloudToken(), "Accept": raw ? "application/vnd.github.raw+json" : "application/vnd.github+json", "X-GitHub-Api-Version":"2022-11-28"};
+  if (body) hdr["Content-Type"] = "application/json";
+  return fetch("https://api.github.com/repos/"+cloudRepo()+"/contents/"+CLOUD_PATH, {method:method, headers:hdr, body: body ? JSON.stringify(body) : undefined, cache:"no-store"});
+}
+function cloudHttpError(status, what){
+  if (status===401) return "GitHub rejected the token (expired or revoked?). Disconnect and paste a new one.";
+  if (status===403) return "Token can't "+what+" "+cloudRepo()+". Check it has Contents: Read and write and that repo selected.";
+  if (status===404) return "Repo "+cloudRepo()+" not found, or the token doesn't have access to it.";
+  return "GitHub error "+status+" while trying to "+what+" the backup.";
+}
+function backupDays(b){ return b && b.data && b.data.ig_h6 && typeof b.data.ig_h6==="object" ? Object.keys(b.data.ig_h6).length : 0; }
+function backupHasData(b){ var d = b && b.data || {}; return backupDays(b)>0 || (d.ig_cardio&&d.ig_cardio.length>0) || (d.ig_meas&&d.ig_meas.length>0) || (d.ig_s6&&d.ig_s6.bodyLog&&d.ig_s6.bodyLog.length>0); }
+// Read the remote file: {sha, backup} ; sha null when the file doesn't exist yet.
+function cloudReadRemote(){
+  return ghContents("GET").then(function(r){
+    if (r.status===404) {
+      // distinguish "no file yet" from "no access to repo"
+      return fetch("https://api.github.com/repos/"+cloudRepo(), {headers:{"Authorization":"Bearer "+cloudToken(),"Accept":"application/vnd.github+json"}, cache:"no-store"})
+        .then(function(rr){ if (!rr.ok) throw {http:rr.status, what:"reach"}; return {sha:null, backup:null}; });
+    }
+    if (!r.ok) throw {http:r.status, what:"read"};
+    return r.json().then(function(j){
+      var sha = j.sha;
+      var parse = function(text){ try { return JSON.parse(text); } catch(e){ return null; } };
+      if (j.content) { var bin = atob(j.content.replace(/\n/g,"")); var bytes = new Uint8Array(bin.length); for (var i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i);
+        return {sha:sha, backup:parse(new TextDecoder().decode(bytes))}; }
+      return ghContents("GET", null, true).then(function(rr){ return rr.ok ? rr.text() : ""; }).then(function(t){ return {sha:sha, backup:parse(t)}; });
+    });
+  });
+}
+var cloudBusy = false, cloudAgain = false, cloudTimer = null;
+function cloudSync(opts){
+  opts = opts || {};
+  if (!cloudToken()) return Promise.resolve(false);
+  if (cloudBusy) { cloudAgain = true; return Promise.resolve(false); }
+  if (typeof navigator!=="undefined" && navigator.onLine===false) { setCloudState({pending:true, syncing:false, lastError:"Offline — will back up when you're online."}); return Promise.resolve(false); }
+  cloudBusy = true; setCloudState({syncing:true});
+  var local = buildBackup(), st = cloudState();
+  if (!opts.overwrite && !backupHasData(local)) { cloudBusy = false; setCloudState({syncing:false, pending:false, lastError:null, note:"Nothing to back up yet."}); return Promise.resolve(false); }
+  var attempt = 0;
+  function put(){
+    return cloudReadRemote().then(function(remote){
+      // First sync on this device: don't overwrite a bigger cloud backup without asking.
+      if (!opts.overwrite && (st.firstSync || !st.lastSync) && remote.backup && backupHasData(remote.backup) && backupDays(remote.backup) > backupDays(local)) {
+        throw {conflict:{days:backupDays(remote.backup), exported:remote.backup.exported||null, localDays:backupDays(local)}};
+      }
+      var body = {message:"Backup "+TODAY+" ("+backupDays(local)+" days)", content:b64encodeUtf8(JSON.stringify(local, null, 1))};
+      if (remote.sha) body.sha = remote.sha;
+      return ghContents("PUT", body).then(function(r){
+        if ((r.status===409 || r.status===422) && attempt++ < 3) return put();   // sha changed under us: refetch and retry
+        if (!r.ok) throw {http:r.status, what:"write to"};
+        return r.json();
+      });
+    });
+  }
+  return put().then(function(j){
+    setCloudState({syncing:false, pending:false, lastSync:Date.now(), lastError:null, conflict:null, firstSync:false, note:null, sha:j && j.content ? j.content.sha : null});
+    return true;
+  }, function(err){
+    if (err && err.conflict) { setCloudState({syncing:false, pending:false, conflict:err.conflict, lastError:null}); return false; }
+    var msg = err && err.http ? cloudHttpError(err.http, err.what) : "Couldn't reach GitHub — will retry automatically.";
+    var retry = !(err && err.http) || err.http>=500 || err.http===429;
+    setCloudState({syncing:false, pending:retry || cloudState().pending, lastError:msg});
+    if (retry) { clearTimeout(cloudTimer); cloudTimer = setTimeout(function(){ cloudSync({}); }, CLOUD_RETRY); }
+    return false;
+  }).then(function(ok){
+    cloudBusy = false;
+    if (cloudAgain) { cloudAgain = false; setTimeout(function(){ cloudSync({}); }, 500); }
+    return ok;
+  });
+}
+// Called after a finished session / weight / measurement / cardio log. Debounced; never blocks.
+function requestCloudSync(){
+  if (!cloudToken()) return;
+  setCloudState({pending:true});
+  clearTimeout(cloudTimer); cloudTimer = setTimeout(function(){ cloudSync({}); }, 2500);
+}
+function cloudMaybeSync(){
+  if (!cloudToken()) return;
+  var st = cloudState();
+  if (st.conflict) return;
+  if (st.pending || !st.lastSync || Date.now()-st.lastSync > CLOUD_OPEN_GAP) cloudSync({});
+}
+function cloudRestore(){
+  if (!cloudToken()) return Promise.resolve(false);
+  setCloudState({syncing:true});
+  return cloudReadRemote().then(function(remote){
+    setCloudState({syncing:false});
+    var b = remote.backup, data = b && b.data;
+    var keys = data && typeof data==="object" ? Object.keys(data).filter(function(k){ return k.indexOf("ig_")===0; }) : [];
+    if (!keys.length || !backupHasData(b)) { setCloudState({lastError:"There's no backup in "+cloudRepo()+" yet."}); return false; }
+    var when = b.exported ? new Date(b.exported).toLocaleString("en-US",{month:"short",day:"numeric",year:"numeric",hour:"numeric",minute:"2-digit"}) : "unknown date";
+    if (!window.confirm("Restore the cloud backup from "+when+" ("+backupDays(b)+" logged days)? This replaces the data on this device.")) return false;
+    keys.forEach(function(k){ ss(k, data[k]); });
+    setCloudState({lastSync:Date.now(), firstSync:false, conflict:null, lastError:null, pending:false});
+    window.location.reload();
+    return true;
+  }, function(err){
+    setCloudState({syncing:false, lastError: err && err.http ? cloudHttpError(err.http, "read") : "Couldn't reach GitHub. Try again when online."});
+    return false;
+  });
+}
+(function cloudAutoStart(){
+  if (typeof window==="undefined") return;
+  setTimeout(cloudMaybeSync, 3000);
+  window.addEventListener("online", function(){ if (cloudState().pending) cloudSync({}); });
+  document.addEventListener("visibilitychange", function(){ if (document.visibilityState==="visible") cloudMaybeSync(); });
+})();
 
 // ── TRAINING BLOCKS: consistent main lifts ─────────────────────────────────
 // For each location + session type, the main lifts stay fixed for a ~4-week block so the
@@ -838,7 +991,13 @@ function streakMsg(s){ return s===0?"Start your streak today 💪":s<4?(s+" day"
 function weeklyTarget(){ var t = gs("ig_wk_target", 3); return (typeof t==="number" && t>=1 && t<=7) ? t : 3; }
 function weekStartOf(ds){ var d = new Date(ds+"T12:00:00"); d.setDate(d.getDate()-d.getDay()); return localISO(d); }
 function prevWeek(ws){ var d = new Date(ws+"T12:00:00"); d.setDate(d.getDate()-7); return localISO(d); }
-function weekCounts(h){ var c = {}; Object.keys(h).forEach(function(d){ if (h[d] && h[d].status==="done") { var w = weekStartOf(d); c[w] = (c[w]||0)+1; } }); return c; }
+function weekCounts(h){
+  var c = {}, seen = {};
+  Object.keys(h).forEach(function(d){ if (h[d] && h[d].status==="done") { seen[d]=1; var w = weekStartOf(d); c[w] = (c[w]||0)+1; } });
+  // cardio counts toward the weekly goal (toggle ig_cardio_counts, default on): one per day, not on a day that already has a strength session
+  if (typeof cardioCounts==="function" && cardioCounts()) getCardio().forEach(function(e){ if (e && e.date && !seen[e.date]) { seen[e.date]=1; var w = weekStartOf(e.date); c[w] = (c[w]||0)+1; } });
+  return c;
+}
 function thisWeekCount(h){ return weekCounts(h)[WEEK_START] || 0; }
 function buildWeekStreak(h){
   var t = weeklyTarget(), c = weekCounts(h), s = 0, w = WEEK_START;
@@ -2468,6 +2627,610 @@ function GoalOnboarding(p) {
     }, g.note)));
   })));
 }
+var TOKEN_URL = "https://github.com/settings/personal-access-tokens/new?name=Personal%20Trainer%20backup&description=Lets%20the%20Personal%20Trainer%20app%20save%20backups%20to%20alfowusu%2Ftrainer-data&target_name=alfowusu&expires_in=366&contents=write";
+function fmtWhen(ms) {
+  if (!ms) return "";
+  var d = new Date(ms);
+  var t = d.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit"
+  });
+  var ds = localISO(d);
+  return ds === TODAY ? "today " + t : d.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric"
+  }) + ", " + t;
+}
+function CloudBackup() {
+  var tickS = useState(0);
+  var setTick = tickS[1];
+  var tokS = useState("");
+  var tok = tokS[0],
+    setTok = tokS[1];
+  var repoS = useState(cloudRepo());
+  var repo = repoS[0],
+    setRepo = repoS[1];
+  useEffect(function () {
+    var f = function () {
+      setTick(function (x) {
+        return x + 1;
+      });
+    };
+    window.addEventListener("pt-cloud", f);
+    var iv = setInterval(f, 30000);
+    return function () {
+      window.removeEventListener("pt-cloud", f);
+      clearInterval(iv);
+    };
+  }, []);
+  var connected = !!cloudToken(),
+    st = cloudState();
+  var box = {
+    background: C.card,
+    border: "1px solid " + C.border,
+    borderRadius: "14px",
+    padding: "14px",
+    marginTop: "10px"
+  };
+  var btn = function (bg, col, bd) {
+    return {
+      flex: 1,
+      padding: "11px",
+      borderRadius: "12px",
+      border: bd || "none",
+      background: bg,
+      color: col,
+      fontWeight: "800",
+      fontSize: "13px",
+      cursor: "pointer",
+      fontFamily: "inherit"
+    };
+  };
+  var inp = {
+    width: "100%",
+    background: "#111",
+    border: "1px solid " + C.border,
+    borderRadius: "10px",
+    padding: "11px 12px",
+    color: C.text,
+    fontSize: "13px",
+    fontFamily: "monospace",
+    outline: "none",
+    marginBottom: "8px"
+  };
+  var status,
+    scol = C.muted;
+  if (st.syncing) status = "⟳ Syncing…";else if (st.conflict) {
+    status = "⚠ Cloud already has a backup";
+    scol = C.yellow;
+  } else if (st.lastError) {
+    status = "⚠ " + st.lastError;
+    scol = st.pending ? C.yellow : C.red;
+  } else if (st.pending) {
+    status = "⏳ Waiting to sync";
+    scol = C.yellow;
+  } else if (st.lastSync) {
+    status = "✓ Last synced " + fmtWhen(st.lastSync);
+    scol = C.green;
+  } else status = st.note || "Not synced yet";
+  return React.createElement("div", {
+    id: "pt-cloud",
+    style: {
+      marginTop: "32px",
+      borderTop: "1px solid " + C.border,
+      paddingTop: "24px"
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: "13px",
+      fontWeight: "700",
+      color: C.text,
+      marginBottom: "6px"
+    }
+  }, "\u2601\uFE0F Cloud backup"), !connected ? React.createElement("div", null, React.createElement("div", {
+    style: {
+      fontSize: "12px",
+      color: C.muted,
+      lineHeight: 1.6,
+      marginBottom: "10px"
+    }
+  }, "Automatically back up to your private GitHub repo ", React.createElement("span", {
+    style: {
+      color: C.text,
+      fontFamily: "monospace"
+    }
+  }, repo), " after each session, weigh-in, measurement or cardio log, so your coach can read it and you can restore on a new phone."), React.createElement("div", {
+    style: Object.assign({}, box, {
+      marginTop: 0,
+      marginBottom: "10px"
+    })
+  }, React.createElement("div", {
+    style: {
+      fontSize: "12px",
+      color: C.text,
+      fontWeight: "700",
+      marginBottom: "6px"
+    }
+  }, "One-time setup (2 minutes)"), React.createElement("ol", {
+    style: {
+      margin: 0,
+      paddingLeft: "18px",
+      fontSize: "12px",
+      color: C.muted,
+      lineHeight: 1.7
+    }
+  }, React.createElement("li", null, React.createElement("a", {
+    id: "pt-token-link",
+    href: TOKEN_URL,
+    target: "_blank",
+    rel: "noopener",
+    style: {
+      color: C.accent,
+      fontWeight: "700"
+    }
+  }, "Open GitHub's token page \u2197"), " (name, owner, expiry and Contents permission are pre-filled)"), React.createElement("li", null, "Repository access \u2192 ", React.createElement("b", {
+    style: {
+      color: C.text
+    }
+  }, "Only select repositories"), " \u2192 pick ", React.createElement("b", {
+    style: {
+      color: C.text
+    }
+  }, "trainer-data")), React.createElement("li", null, "Check Permissions shows ", React.createElement("b", {
+    style: {
+      color: C.text
+    }
+  }, "Contents: Read and write"), " \u2192 ", React.createElement("b", {
+    style: {
+      color: C.text
+    }
+  }, "Generate token")), React.createElement("li", null, "Copy the token (starts with ", React.createElement("span", {
+    style: {
+      fontFamily: "monospace"
+    }
+  }, "github_pat_"), ") and paste it below"))), React.createElement("input", {
+    id: "pt-token",
+    type: "password",
+    autoComplete: "off",
+    spellCheck: false,
+    placeholder: "Paste token: github_pat_\u2026",
+    value: tok,
+    onChange: function (e) {
+      setTok(e.target.value);
+    },
+    style: inp
+  }), React.createElement("input", {
+    id: "pt-repo",
+    type: "text",
+    autoComplete: "off",
+    spellCheck: false,
+    value: repo,
+    onChange: function (e) {
+      setRepo(e.target.value);
+    },
+    style: Object.assign({}, inp, {
+      fontSize: "11px",
+      color: C.muted
+    })
+  }), tok && !/^(github_pat_|ghp_)/.test(tok.trim()) && React.createElement("div", {
+    style: {
+      fontSize: "11px",
+      color: C.yellow,
+      marginBottom: "8px"
+    }
+  }, "That doesn't look like a GitHub token (they start with github_pat_)."), React.createElement("button", {
+    id: "pt-cloud-connect",
+    disabled: !tok.trim(),
+    onClick: function () {
+      cloudConnect(tok, repo);
+      setTok("");
+      setTick(function (x) {
+        return x + 1;
+      });
+    },
+    style: Object.assign(btn(tok.trim() ? C.accent : "#333", "#fff"), {
+      width: "100%"
+    })
+  }, "Connect & back up"), React.createElement("div", {
+    style: {
+      fontSize: "11px",
+      color: C.muted,
+      marginTop: "8px",
+      lineHeight: 1.5
+    }
+  }, "\uD83D\uDD12 The token is stored only on this device. It's never included in backups or exports.")) : React.createElement("div", null, React.createElement("div", {
+    style: {
+      fontSize: "12px",
+      color: C.muted,
+      marginBottom: "8px"
+    }
+  }, "Backing up to ", React.createElement("span", {
+    style: {
+      color: C.text,
+      fontFamily: "monospace"
+    }
+  }, cloudRepo()), " \xB7 ", CLOUD_PATH), React.createElement("div", {
+    id: "pt-cloud-status",
+    style: {
+      fontSize: "13px",
+      fontWeight: "700",
+      color: scol,
+      lineHeight: 1.5,
+      marginBottom: "10px"
+    }
+  }, status), st.conflict && React.createElement("div", {
+    id: "pt-cloud-conflict",
+    style: Object.assign({}, box, {
+      marginTop: 0,
+      marginBottom: "10px",
+      borderColor: C.yellow + "55"
+    })
+  }, React.createElement("div", {
+    style: {
+      fontSize: "12px",
+      color: C.muted,
+      lineHeight: 1.6,
+      marginBottom: "10px"
+    }
+  }, "The cloud backup has ", React.createElement("b", {
+    style: {
+      color: C.text
+    }
+  }, st.conflict.days, " logged days"), st.conflict.exported ? " (from " + fmtWhen(Date.parse(st.conflict.exported)) + ")" : "", "; this device has ", st.conflict.localDays, ". Restore it here, or replace it with this device's data."), React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: "8px"
+    }
+  }, React.createElement("button", {
+    id: "pt-conflict-restore",
+    onClick: cloudRestore,
+    style: btn(C.accent, "#fff")
+  }, "Restore from cloud"), React.createElement("button", {
+    id: "pt-conflict-overwrite",
+    onClick: function () {
+      if (window.confirm("Replace the cloud backup (" + st.conflict.days + " days) with this device's data (" + st.conflict.localDays + " days)?")) cloudSync({
+        overwrite: true
+      });
+    },
+    style: btn("transparent", C.muted, "1px solid " + C.border)
+  }, "Replace cloud copy"))), React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: "8px",
+      flexWrap: "wrap"
+    }
+  }, React.createElement("button", {
+    id: "pt-cloud-sync",
+    disabled: !!st.syncing,
+    onClick: function () {
+      cloudSync({
+        force: true
+      });
+    },
+    style: btn(C.accent, "#fff")
+  }, "\u27F3 Sync now"), React.createElement("button", {
+    id: "pt-cloud-restore",
+    onClick: cloudRestore,
+    style: btn(C.card, C.text, "1px solid " + C.border)
+  }, "\u2B07 Restore from cloud")), React.createElement("button", {
+    id: "pt-cloud-disconnect",
+    onClick: function () {
+      if (window.confirm("Disconnect cloud backup? This removes the token from this device. Your backup on GitHub stays.")) {
+        cloudDisconnect();
+        setRepo(cloudRepo());
+      }
+    },
+    style: {
+      width: "100%",
+      marginTop: "8px",
+      padding: "10px",
+      borderRadius: "12px",
+      border: "1px solid " + C.border,
+      background: "transparent",
+      color: C.muted,
+      fontWeight: "700",
+      fontSize: "12px",
+      cursor: "pointer",
+      fontFamily: "inherit"
+    }
+  }, "Disconnect (remove token)")));
+}
+function MiniLine(p) {
+  var pts = p.pts || [],
+    W = 320,
+    H = p.h || 110,
+    L = 30,
+    R = 8,
+    T = 10,
+    B = 20;
+  if (pts.length < 2) return null;
+  var ys = pts.map(function (q) {
+      return q.y;
+    }),
+    mn = Math.min.apply(null, ys),
+    mx = Math.max.apply(null, ys);
+  if (mn === mx) {
+    mn -= 1;
+    mx += 1;
+  }
+  var X = function (i) {
+      return L + i * (W - L - R) / (pts.length - 1);
+    },
+    Y = function (v) {
+      return T + (H - T - B) * (1 - (v - mn) / (mx - mn));
+    };
+  var lab = function (d) {
+    var x = new Date(d + "T12:00:00");
+    return x.getMonth() + 1 + "/" + x.getDate();
+  };
+  return React.createElement("svg", {
+    className: p.cls || "pt-mini",
+    viewBox: "0 0 " + W + " " + H,
+    style: {
+      width: "100%",
+      height: "auto",
+      display: "block"
+    }
+  }, React.createElement("text", {
+    x: L - 4,
+    y: Y(mx) + 3,
+    fill: "#6b5e56",
+    fontSize: "9",
+    textAnchor: "end"
+  }, Math.round(mx * 10) / 10), React.createElement("text", {
+    x: L - 4,
+    y: Y(mn) + 3,
+    fill: "#6b5e56",
+    fontSize: "9",
+    textAnchor: "end"
+  }, Math.round(mn * 10) / 10), React.createElement("polyline", {
+    fill: "none",
+    stroke: p.color || C.accent,
+    strokeWidth: "2",
+    points: pts.map(function (q, i) {
+      return X(i) + "," + Y(q.y);
+    }).join(" ")
+  }), pts.map(function (q, i) {
+    return React.createElement("circle", {
+      key: i,
+      cx: X(i),
+      cy: Y(q.y),
+      r: "3",
+      fill: p.color || C.accent
+    });
+  }), React.createElement("text", {
+    x: X(0),
+    y: H - 5,
+    fill: "#6b5e56",
+    fontSize: "9",
+    textAnchor: "start"
+  }, lab(pts[0].d)), React.createElement("text", {
+    x: X(pts.length - 1),
+    y: H - 5,
+    fill: "#6b5e56",
+    fontSize: "9",
+    textAnchor: "end"
+  }, lab(pts[pts.length - 1].d)));
+}
+function CardioSheet(p) {
+  var fS = useState({
+    type: "run",
+    min: "",
+    mi: "",
+    effort: "moderate",
+    date: TODAY
+  });
+  var f = fS[0],
+    setF = fS[1];
+  var set = function (k, v) {
+    var o = Object.assign({}, f);
+    o[k] = v;
+    setF(o);
+  };
+  var chip = function (on, col) {
+    return {
+      padding: "9px 10px",
+      borderRadius: "12px",
+      border: "2px solid " + (on ? col || C.accent : C.border),
+      background: on ? (col || C.accent) + "1f" : "transparent",
+      color: on ? col || C.accent : C.muted,
+      fontWeight: "800",
+      fontSize: "12px",
+      cursor: "pointer",
+      fontFamily: "inherit"
+    };
+  };
+  var inp = {
+    width: "100%",
+    background: "#111",
+    border: "1px solid " + C.border,
+    borderRadius: "10px",
+    padding: "12px",
+    color: C.text,
+    fontSize: "15px",
+    fontFamily: "inherit",
+    outline: "none"
+  };
+  var min = parseFloat(f.min),
+    valid = min > 0 && min <= 1440;
+  function save() {
+    if (!valid) return;
+    var mi = parseFloat(f.mi);
+    p.onSave({
+      id: "c" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      date: f.date || TODAY,
+      type: f.type,
+      min: Math.round(min),
+      mi: mi > 0 ? Math.round(mi * 100) / 100 : null,
+      effort: f.effort
+    });
+  }
+  return React.createElement("div", {
+    onClick: p.onClose,
+    style: {
+      position: "fixed",
+      inset: 0,
+      zIndex: 320,
+      background: "rgba(0,0,0,0.85)",
+      display: "flex",
+      alignItems: "flex-end",
+      justifyContent: "center"
+    }
+  }, React.createElement("div", {
+    id: "pt-cardio-sheet",
+    onClick: function (e) {
+      e.stopPropagation();
+    },
+    style: {
+      background: "#1a1614",
+      borderRadius: "20px 20px 0 0",
+      padding: "22px",
+      width: "100%",
+      maxWidth: "430px",
+      maxHeight: "85vh",
+      overflowY: "auto",
+      paddingBottom: "34px"
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: "17px",
+      fontWeight: "900",
+      color: C.text,
+      marginBottom: "14px"
+    }
+  }, "Log cardio"), React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: "6px",
+      flexWrap: "wrap",
+      marginBottom: "14px"
+    }
+  }, Object.keys(CARDIO_TYPES).map(function (k) {
+    var t = CARDIO_TYPES[k];
+    return React.createElement("button", {
+      key: k,
+      className: "pt-cardio-type",
+      onClick: function () {
+        set("type", k);
+      },
+      style: chip(f.type === k)
+    }, t.emoji, " ", t.label);
+  })), React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: "8px",
+      marginBottom: "14px"
+    }
+  }, React.createElement("label", {
+    style: {
+      flex: 1
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: "11px",
+      color: C.muted,
+      marginBottom: "4px"
+    }
+  }, "Duration (min)"), React.createElement("input", {
+    id: "pt-cardio-min",
+    type: "number",
+    inputMode: "numeric",
+    min: "1",
+    placeholder: "30",
+    value: f.min,
+    onChange: function (e) {
+      set("min", e.target.value);
+    },
+    style: inp
+  })), React.createElement("label", {
+    style: {
+      flex: 1
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: "11px",
+      color: C.muted,
+      marginBottom: "4px"
+    }
+  }, "Distance (mi, optional)"), React.createElement("input", {
+    id: "pt-cardio-mi",
+    type: "number",
+    inputMode: "decimal",
+    step: "0.1",
+    min: "0",
+    placeholder: "\u2014",
+    value: f.mi,
+    onChange: function (e) {
+      set("mi", e.target.value);
+    },
+    style: inp
+  }))), React.createElement("div", {
+    style: {
+      fontSize: "11px",
+      color: C.muted,
+      marginBottom: "6px"
+    }
+  }, "Effort"), React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: "6px",
+      marginBottom: "14px"
+    }
+  }, Object.keys(CARDIO_EFFORT).map(function (k) {
+    var e = CARDIO_EFFORT[k];
+    return React.createElement("button", {
+      key: k,
+      className: "pt-cardio-effort",
+      onClick: function () {
+        set("effort", k);
+      },
+      style: Object.assign(chip(f.effort === k, e.color), {
+        flex: 1
+      })
+    }, e.label);
+  })), React.createElement("label", null, React.createElement("div", {
+    style: {
+      fontSize: "11px",
+      color: C.muted,
+      marginBottom: "4px"
+    }
+  }, "Date"), React.createElement("input", {
+    id: "pt-cardio-date",
+    type: "date",
+    max: TODAY,
+    value: f.date,
+    onChange: function (e) {
+      set("date", e.target.value || TODAY);
+    },
+    style: Object.assign({}, inp, {
+      marginBottom: "16px",
+      colorScheme: "dark"
+    })
+  })), React.createElement("button", {
+    id: "pt-cardio-save",
+    disabled: !valid,
+    onClick: save,
+    style: {
+      width: "100%",
+      padding: "15px",
+      borderRadius: "14px",
+      border: "none",
+      background: valid ? C.accent : "#333",
+      color: "#fff",
+      fontWeight: "900",
+      fontSize: "15px",
+      cursor: valid ? "pointer" : "default",
+      fontFamily: "inherit"
+    }
+  }, "Save cardio"), React.createElement("div", {
+    style: {
+      fontSize: "11px",
+      color: C.muted,
+      marginTop: "8px",
+      textAlign: "center"
+    }
+  }, cardioCounts() ? "Counts toward your weekly session goal (change in Stats → Cardio)." : "Not counted toward your weekly goal (change in Stats → Cardio).")));
+}
 function SettingsScreen(p) {
   var type = p.type;
   var current = p.current;
@@ -3029,7 +3792,7 @@ function SettingsScreen(p) {
         marginBottom: "14px",
         lineHeight: 1.5
       }
-    }, "Everything is stored only in this browser on this device. Export a backup now and then; import it to restore or move to a new phone."), React.createElement("div", {
+    }, "Everything is stored in this browser on this device. Export a backup now and then (or turn on Cloud backup below); import it to restore or move to a new phone."), React.createElement("div", {
       style: {
         display: "flex",
         gap: "8px",
@@ -3090,7 +3853,7 @@ function SettingsScreen(p) {
         cursor: "pointer",
         fontFamily: "inherit"
       }
-    }, "\u2B07 CSV"))), React.createElement("div", {
+    }, "\u2B07 CSV"))), React.createElement(CloudBackup, null), React.createElement("div", {
       style: {
         marginTop: "32px",
         borderTop: "1px solid " + C.border,
@@ -3153,6 +3916,43 @@ function StatsTab(p) {
   });
   var form = formS[0];
   var setForm = formS[1];
+  var measFormS = useState({});
+  var measForm = measFormS[0];
+  var setMeasForm = measFormS[1];
+  var measS = useState(function () {
+    return getMeas();
+  });
+  var meas = measS[0];
+  var setMeas = measS[1];
+  var cTickS = useState(0);
+  var bumpC = cTickS[1];
+  var cardio = p.cardio || getCardio();
+  function saveMeas() {
+    var e = {
+        date: TODAY
+      },
+      any = false;
+    MEASURES.forEach(function (k) {
+      var v = parseFloat(measForm[k]);
+      if (v > 0 && v < 200) {
+        e[k] = Math.round(v * 10) / 10;
+        any = true;
+      }
+    });
+    if (!any) return;
+    var list = getMeas(),
+      i = list.findIndex(function (m) {
+        return m.date === TODAY;
+      });
+    if (i >= 0) list[i] = Object.assign({}, list[i], e);else list.push(e);
+    list.sort(function (a, b) {
+      return a.date < b.date ? -1 : a.date > b.date ? 1 : 0;
+    });
+    ss("ig_meas", list);
+    setMeas(list);
+    setMeasForm({});
+    if (p.onMeasSaved) p.onMeasSaved();
+  }
   var prFormS = useState({
     exercise: "Barbell Bench Press",
     weight: ""
@@ -3167,9 +3967,66 @@ function StatsTab(p) {
   prs.forEach(function (p) {
     if (!best[p.exercise] || p.weight > best[p.exercise].weight) best[p.exercise] = p;
   });
-  var sorted2 = Object.keys(history).sort().reverse().slice(0, 30).map(function (d) {
+  var logDays = {};
+  Object.keys(history).forEach(function (d) {
+    logDays[d] = 1;
+  });
+  cardio.forEach(function (c) {
+    logDays[c.date] = 1;
+  });
+  var sorted2 = Object.keys(logDays).sort().reverse().slice(0, 30).map(function (d) {
     return [d, history[d]];
   });
+  function cardioRow(c) {
+    var t = CARDIO_TYPES[c.type] || CARDIO_TYPES.other,
+      ef = CARDIO_EFFORT[c.effort];
+    return React.createElement("div", {
+      key: c.id,
+      className: "pt-cardio-row",
+      style: {
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        marginTop: "8px",
+        padding: "8px 10px",
+        background: "rgba(96,165,250,0.06)",
+        border: "1px solid rgba(96,165,250,0.18)",
+        borderRadius: "10px"
+      }
+    }, React.createElement("span", {
+      style: {
+        fontSize: "13px",
+        color: C.text,
+        fontWeight: "700"
+      }
+    }, t.emoji, " ", t.label, " ", React.createElement("span", {
+      style: {
+        color: C.muted,
+        fontWeight: "600"
+      }
+    }, "\xB7 ", c.min, " min", c.mi ? " · " + c.mi + " mi" : ""), ef && React.createElement("span", {
+      style: {
+        color: ef.color,
+        fontSize: "11px",
+        marginLeft: "6px"
+      }
+    }, ef.label)), React.createElement("button", {
+      className: "pt-cardio-del",
+      "aria-label": "Delete cardio entry",
+      onClick: function () {
+        if (window.confirm("Delete this " + t.label.toLowerCase() + " (" + c.min + " min)?")) p.onSaveCardio(getCardio().filter(function (x) {
+          return x.id !== c.id;
+        }));
+      },
+      style: {
+        background: "transparent",
+        border: "none",
+        color: C.muted,
+        cursor: "pointer",
+        fontSize: "14px"
+      }
+    }, "\u2715"));
+  }
   var inp = {
     background: "#111",
     border: "1px solid " + C.border,
@@ -3235,7 +4092,7 @@ function StatsTab(p) {
       gap: "6px",
       marginBottom: "20px"
     }
-  }, [["body", "Body"], ["prs", "PRs"], ["progress", "Progress"], ["log", "Log"]].map(function (item) {
+  }, [["body", "Body"], ["prs", "PRs"], ["progress", "Progress"], ["cardio", "Cardio"], ["log", "Log"]].map(function (item) {
     var k = item[0];
     var l = item[1];
     return React.createElement("button", {
@@ -3244,6 +4101,8 @@ function StatsTab(p) {
         setSec(k);
       },
       style: Object.assign({}, btnSt, {
+        padding: "9px 2px",
+        fontSize: "12px",
         background: sec === k ? C.accent : C.card,
         color: sec === k ? "#fff" : C.muted
       })
@@ -3541,7 +4400,322 @@ function StatsTab(p) {
         color: C.accent
       }
     }, p.weight, " lbs"));
-  }))), sec === "progress" && React.createElement(ProgressSection, {
+  }))), sec === "body" && React.createElement("div", {
+    id: "pt-meas",
+    style: {
+      marginTop: "28px",
+      borderTop: "1px solid " + C.border,
+      paddingTop: "20px"
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: "13px",
+      fontWeight: "700",
+      color: C.text,
+      marginBottom: "6px"
+    }
+  }, "Body measurements"), React.createElement("div", {
+    style: {
+      fontSize: "12px",
+      color: C.muted,
+      marginBottom: "12px"
+    }
+  }, "Optional, in inches. Fill in any you track \u2014 once a week, same spot each time."), React.createElement("div", {
+    style: {
+      display: "grid",
+      gridTemplateColumns: "1fr 1fr",
+      gap: "8px",
+      marginBottom: "8px"
+    }
+  }, MEASURES.map(function (k) {
+    var last = meas.filter(function (m) {
+      return m[k] != null;
+    }).slice(-1)[0];
+    return React.createElement("label", {
+      key: k
+    }, React.createElement("div", {
+      style: {
+        fontSize: "11px",
+        color: C.muted,
+        marginBottom: "3px"
+      }
+    }, MEASURE_LABEL[k], last ? " · last " + last[k] + "″" : ""), React.createElement("input", {
+      className: "pt-meas-in",
+      "data-k": k,
+      type: "number",
+      inputMode: "decimal",
+      step: "0.1",
+      placeholder: "in",
+      value: measForm[k] || "",
+      onChange: function (e) {
+        var o = Object.assign({}, measForm);
+        o[k] = e.target.value;
+        setMeasForm(o);
+      },
+      style: inp
+    }));
+  })), React.createElement("button", {
+    id: "pt-meas-save",
+    onClick: saveMeas,
+    style: {
+      width: "100%",
+      padding: "13px",
+      borderRadius: "10px",
+      border: "none",
+      background: C.accent,
+      color: "#fff",
+      fontWeight: "800",
+      fontSize: "14px",
+      cursor: "pointer",
+      fontFamily: "inherit"
+    }
+  }, "Save measurements"), MEASURES.map(function (k) {
+    var pts = meas.filter(function (m) {
+      return m[k] != null;
+    }).slice(-12).map(function (m) {
+      return {
+        d: m.date,
+        y: m[k]
+      };
+    });
+    if (pts.length < 2) return null;
+    var dlt = Math.round((pts[pts.length - 1].y - pts[0].y) * 10) / 10;
+    return React.createElement("div", {
+      key: k,
+      style: {
+        background: C.card,
+        border: "1px solid " + C.border,
+        borderRadius: "14px",
+        padding: "12px 14px",
+        marginTop: "12px"
+      }
+    }, React.createElement("div", {
+      style: {
+        display: "flex",
+        justifyContent: "space-between",
+        fontSize: "11px",
+        color: C.muted,
+        textTransform: "uppercase",
+        letterSpacing: "0.1em",
+        fontFamily: "monospace",
+        marginBottom: "6px"
+      }
+    }, React.createElement("span", null, MEASURE_LABEL[k], " trend"), React.createElement("span", {
+      style: {
+        color: C.text
+      }
+    }, pts[pts.length - 1].y, "\u2033 (", dlt > 0 ? "+" : "", dlt, ")")), React.createElement(MiniLine, {
+      pts: pts,
+      cls: "pt-meas-chart",
+      color: C.blue
+    }));
+  })), sec === "cardio" && function () {
+    var weeks = [];
+    for (var i = 7; i >= 0; i--) {
+      var w = new Date(WEEK_START + "T12:00:00");
+      w.setDate(w.getDate() - 7 * i);
+      weeks.push(localISO(w));
+    }
+    var mins = weeks.map(cardioWeekMinutes),
+      mmax = Math.max(30, Math.max.apply(null, mins));
+    var counts = cardioCounts();
+    var lab = function (d) {
+      var x = new Date(d + "T12:00:00");
+      return x.getMonth() + 1 + "/" + x.getDate();
+    };
+    var recent = cardio.slice().reverse().slice(0, 20);
+    return React.createElement("div", {
+      id: "pt-cardio-sec"
+    }, React.createElement("div", {
+      style: {
+        display: "flex",
+        gap: "8px",
+        marginBottom: "16px"
+      }
+    }, React.createElement("div", {
+      style: {
+        flex: 1,
+        background: C.card,
+        borderRadius: "12px",
+        padding: "14px",
+        border: "1px solid " + C.border
+      }
+    }, React.createElement("div", {
+      id: "pt-cardio-week",
+      style: {
+        fontSize: "22px",
+        fontWeight: "900",
+        color: C.accent
+      }
+    }, mins[7], " min"), React.createElement("div", {
+      style: {
+        fontSize: "11px",
+        color: C.muted,
+        marginTop: "2px"
+      }
+    }, "Cardio this week")), React.createElement("div", {
+      style: {
+        flex: 1,
+        background: C.card,
+        borderRadius: "12px",
+        padding: "14px",
+        border: "1px solid " + C.border
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: "22px",
+        fontWeight: "900",
+        color: C.text
+      }
+    }, cardio.filter(function (c) {
+      return c.date >= WEEK_START;
+    }).length), React.createElement("div", {
+      style: {
+        fontSize: "11px",
+        color: C.muted,
+        marginTop: "2px"
+      }
+    }, "Sessions this week"))), React.createElement("div", {
+      style: {
+        background: C.card,
+        border: "1px solid " + C.border,
+        borderRadius: "14px",
+        padding: "16px",
+        marginBottom: "16px"
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: "11px",
+        color: C.muted,
+        textTransform: "uppercase",
+        letterSpacing: "0.1em",
+        fontFamily: "monospace",
+        marginBottom: "10px"
+      }
+    }, "Weekly cardio minutes"), React.createElement("svg", {
+      className: "pt-cardio-chart",
+      viewBox: "0 0 320 120",
+      style: {
+        width: "100%",
+        height: "auto",
+        display: "block"
+      }
+    }, mins.map(function (m, i) {
+      var bw = 30,
+        x = 10 + i * 38,
+        bh = m > 0 ? Math.max(3, m / mmax * 80) : 0;
+      return React.createElement("g", {
+        key: i
+      }, React.createElement("rect", {
+        x: x,
+        y: 95 - bh,
+        width: bw,
+        height: bh,
+        rx: "3",
+        fill: i === 7 ? C.accent : "#60a5fa",
+        opacity: i === 7 ? 1 : 0.55
+      }), m > 0 && React.createElement("text", {
+        x: x + bw / 2,
+        y: 90 - bh,
+        fill: "#c8bdb5",
+        fontSize: "9",
+        textAnchor: "middle"
+      }, m), React.createElement("text", {
+        x: x + bw / 2,
+        y: 112,
+        fill: "#6b5e56",
+        fontSize: "9",
+        textAnchor: "middle"
+      }, lab(weeks[i])));
+    }))), React.createElement("button", {
+      id: "pt-cardio-log2",
+      onClick: p.onLogCardio,
+      style: {
+        width: "100%",
+        padding: "13px",
+        borderRadius: "10px",
+        border: "none",
+        background: C.accent,
+        color: "#fff",
+        fontWeight: "800",
+        fontSize: "14px",
+        cursor: "pointer",
+        fontFamily: "inherit",
+        marginBottom: "12px"
+      }
+    }, "\uFF0B Log cardio"), React.createElement("button", {
+      id: "pt-cardio-counts",
+      onClick: function () {
+        ss("ig_cardio_counts", !counts);
+        bumpC(function (x) {
+          return x + 1;
+        });
+      },
+      style: {
+        width: "100%",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        background: C.card,
+        border: "1px solid " + C.border,
+        borderRadius: "12px",
+        padding: "12px 14px",
+        cursor: "pointer",
+        fontFamily: "inherit",
+        marginBottom: "16px"
+      }
+    }, React.createElement("span", {
+      style: {
+        fontSize: "13px",
+        color: C.text,
+        fontWeight: "700",
+        textAlign: "left"
+      }
+    }, "Count cardio toward weekly goal", React.createElement("div", {
+      style: {
+        fontSize: "11px",
+        color: C.muted,
+        fontWeight: "500",
+        marginTop: "2px"
+      }
+    }, "One per day; days with a strength session already count.")), React.createElement("span", {
+      style: {
+        width: "40px",
+        height: "22px",
+        borderRadius: "11px",
+        background: counts ? C.accent : "#3a302a",
+        position: "relative",
+        flexShrink: 0
+      }
+    }, React.createElement("span", {
+      style: {
+        position: "absolute",
+        top: "3px",
+        left: counts ? "21px" : "3px",
+        width: "16px",
+        height: "16px",
+        borderRadius: "8px",
+        background: "#fff"
+      }
+    }))), recent.length === 0 ? React.createElement("div", {
+      style: {
+        color: C.muted,
+        textAlign: "center",
+        padding: "20px 0",
+        fontSize: "13px"
+      }
+    }, "No cardio logged yet.") : recent.map(function (c) {
+      return React.createElement("div", {
+        key: c.id
+      }, React.createElement("div", {
+        style: {
+          fontSize: "11px",
+          color: C.muted,
+          marginTop: "10px"
+        }
+      }, c.date === TODAY ? "Today" : fmt(c.date)), cardioRow(c));
+    }));
+  }(), sec === "progress" && React.createElement(ProgressSection, {
     history: history,
     progEx: progEx,
     setProgEx: setProgEx
@@ -3592,6 +4766,22 @@ function StatsTab(p) {
   }, "No sessions yet.") : sorted2.map(function (entry) {
     var d = entry[0];
     var data = entry[1];
+    var dayCardio = cardio.filter(function (c) {
+      return c.date === d;
+    });
+    if (!data) return React.createElement("div", {
+      key: d,
+      style: {
+        padding: "13px 0",
+        borderBottom: "1px solid " + C.border
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: "14px",
+        fontWeight: "700",
+        color: d === TODAY ? C.accent : C.text
+      }
+    }, d === TODAY ? "Today" : fmt(d)), dayCardio.map(cardioRow));
     var s = SESSIONS.filter(function (s) {
       return s.key === (data && data.sessionKey);
     })[0];
@@ -3653,7 +4843,7 @@ function StatsTab(p) {
         marginTop: "6px",
         fontStyle: "italic"
       }
-    }, "\"", data.notes, "\""), openDay === d && data && React.createElement("div", {
+    }, "\"", data.notes, "\""), dayCardio.map(cardioRow), openDay === d && data && React.createElement("div", {
       className: "pt-log-edit",
       style: {
         marginTop: "10px",
@@ -4232,6 +5422,16 @@ function App() {
   });
   var stats = statsS[0];
   var setStats = statsS[1];
+  var cardioS = useState(function () {
+    return getCardio();
+  });
+  var cardio = cardioS[0];
+  var setCardioState = cardioS[1];
+  var cardioOpenS = useState(false);
+  var cardioOpen = cardioOpenS[0];
+  var setCardioOpen = cardioOpenS[1];
+  var measTickS = useState(0);
+  var setMeasTick = measTickS[1];
   var exercisesS = useState([]);
   var exercises = exercisesS[0];
   var setExercises = exercisesS[1];
@@ -4338,7 +5538,14 @@ function App() {
   var wDismissS = useState(gs("ig_wdismiss", null));
   var wDismissed = wDismissS[0] === WEEK_START;
   var setWDismiss = wDismissS[1];
-  var showWeightReminder = !weightLoggedThisWeek && !wDismissed && new Date().getDay() !== 0;
+  var measLog = getMeas();
+  var tracksMeas = measLog.length > 0,
+    measThisWeek = measLog.some(function (e) {
+      return e.date >= WEEK_START;
+    });
+  var needMeas = tracksMeas && !measThisWeek;
+  var showWeightReminder = (!weightLoggedThisWeek || needMeas) && !wDismissed && new Date().getDay() !== 0;
+  var weighInMsg = !weightLoggedThisWeek ? needMeas ? "Log your weight and body measurements once this week." : "Log your weight once this week (measurements optional)." : "Weight's in — add this week's body measurements too.";
   useEffect(function () {
     if (todayRec && todayRec.isRest && !todayRec.sessMeta) {
       setWorkPhase("restlogged");
@@ -4376,6 +5583,24 @@ function App() {
   function saveS(next) {
     setStats(next);
     ss("ig_s6", next);
+    requestCloudSync();
+  }
+  function saveCardio(list) {
+    ss("ig_cardio", list);
+    setCardioState(list);
+    requestCloudSync();
+  }
+  function addCardio(e) {
+    saveCardio(getCardio().concat([e]).sort(function (a, b) {
+      return a.date < b.date ? -1 : a.date > b.date ? 1 : 0;
+    }));
+    setCardioOpen(false);
+  }
+  function onMeasSaved() {
+    setMeasTick(function (x) {
+      return x + 1;
+    });
+    requestCloudSync();
   }
   function getLastWeight(exId) {
     var past = Object.keys(history).filter(function (d) {
@@ -4677,6 +5902,7 @@ function App() {
       })
     }));
     setWorkPhase("done");
+    requestCloudSync();
   }
   function markSkip() {
     saveH(Object.assign({}, history, {
@@ -4689,7 +5915,11 @@ function App() {
   }
   function resetAllData() {
     if (!window.confirm("Reset everything? This deletes all your sessions, weights, PRs and settings. Cannot be undone.")) return;
-    var keys = ["ig_h6", "ig_s6", "ig_w5", "ig_d3", "ig_l3", "ig_phase", "ig_gender", "ig_dur", "ig_tips_seen", "ig_intensity", "ig_goal", "ig_skips", "ig_prog", "ig_ladder"];
+    var keys = ["ig_h6", "ig_s6", "ig_w5", "ig_d3", "ig_l3", "ig_phase", "ig_gender", "ig_dur", "ig_tips_seen", "ig_intensity", "ig_goal", "ig_skips", "ig_prog", "ig_ladder", "ig_wk_target", "ig_block", "ig_wdismiss", "ig_cardio", "ig_cardio_counts", "ig_meas"];
+    if (cloudToken()) ss("pt_cloud", {
+      repo: cloudRepo(),
+      firstSync: true
+    });
     keys.forEach(function (k) {
       try {
         localStorage.removeItem(k);
@@ -5018,7 +6248,12 @@ function App() {
   };
   return React.createElement("div", {
     style: mainSt
-  }, confirm && React.createElement("div", {
+  }, cardioOpen && React.createElement(CardioSheet, {
+    onSave: addCardio,
+    onClose: function () {
+      setCardioOpen(false);
+    }
+  }), confirm && React.createElement("div", {
     style: {
       position: "fixed",
       inset: 0,
@@ -5499,7 +6734,7 @@ function App() {
       fontSize: "12px",
       color: C.muted
     }
-  }, "Log your weight once this week to track progress.")), React.createElement("div", {
+  }, weighInMsg)), React.createElement("div", {
     style: {
       display: "flex",
       gap: "6px",
@@ -5823,6 +7058,43 @@ function App() {
         }
       }, n);
     })));
+  }(), function () {
+    var wm = cardioWeekMinutes(WEEK_START),
+      todays = cardioOn(TODAY);
+    return React.createElement("button", {
+      id: "pt-cardio-btn",
+      onClick: function () {
+        setCardioOpen(true);
+      },
+      style: {
+        width: "100%",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: "10px",
+        background: C.card,
+        border: "1px solid " + C.border,
+        borderRadius: "14px",
+        padding: "12px 16px",
+        marginBottom: "14px",
+        cursor: "pointer",
+        fontFamily: "inherit",
+        textAlign: "left"
+      }
+    }, React.createElement("span", {
+      style: {
+        fontSize: "14px",
+        fontWeight: "800",
+        color: C.text
+      }
+    }, "\uD83C\uDFC3 Log cardio"), React.createElement("span", {
+      style: {
+        fontSize: "12px",
+        color: C.muted
+      }
+    }, todays.length ? todays.map(function (c) {
+      return (CARDIO_TYPES[c.type] || CARDIO_TYPES.other).emoji + " " + c.min + " min";
+    }).join(" · ") + " today" : wm > 0 ? wm + " min this week" : "Run · walk · bike · row", " \uFF0B"));
   }(), React.createElement("div", {
     style: {
       display: "flex",
@@ -6792,7 +8064,13 @@ function App() {
     onSave: saveS,
     history: history,
     onSaveHistory: saveH,
-    onDeleteDay: deleteDay
+    onDeleteDay: deleteDay,
+    cardio: cardio,
+    onSaveCardio: saveCardio,
+    onLogCardio: function () {
+      setCardioOpen(true);
+    },
+    onMeasSaved: onMeasSaved
   })));
 }
 ReactDOM.render(React.createElement(App, null), document.getElementById('root'));
