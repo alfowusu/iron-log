@@ -845,6 +845,88 @@ function cloudRestore(){
   document.addEventListener("visibilitychange", function(){ if (document.visibilityState==="visible") cloudMaybeSync(); });
 })();
 
+// ── AUTO difficulty / goal / duration (rule-based, explainable) ──────────────
+// New key ig_auto = {diff:bool, goal:bool, dur:bool}. Explicit choices stay in ig_d3 / ig_goal / ig_dur.
+// One-time, idempotent: new users (no history, no goal) default to Auto; existing users keep their explicit settings.
+function getAuto(){ var a = gs("ig_auto", null); return (a && typeof a==="object") ? a : {}; }
+function setAutoFlag(k, v){ var a = getAuto(); a[k] = !!v; ss("ig_auto", a); }
+(function migrateAuto(){
+  if (gs("ig_auto", null) !== null) return;
+  var h = gs("ig_h6", {}), existing = (h && Object.keys(h).length>0) || gs("ig_goal", null)!==null || gs("ig_d3", null)!==null || gs("ig_dur", null)!==null;
+  ss("ig_auto", existing ? {diff:false, goal:false, dur:false} : {diff:true, goal:true, dur:true});
+})();
+var DUR_OPTS = [15,30,45,60,90];
+function snapDur(m){ var best = 45; DUR_OPTS.forEach(function(o){ if (Math.abs(o-m) < Math.abs(best-m)) best = o; }); return best; }
+function stepDur(m, dir){ var i = DUR_OPTS.indexOf(snapDur(m)); return DUR_OPTS[Math.max(0, Math.min(DUR_OPTS.length-1, i+dir))]; }
+function doneDays(h){ return Object.keys(h).filter(function(d){ return h[d] && h[d].status==="done"; }).sort(); }
+function median(a){ var s = a.slice().sort(function(x,y){return x-y;}); var n = s.length; return n ? (n%2 ? s[(n-1)/2] : (s[n/2-1]+s[n/2])/2) : 0; }
+function liftsProgressed(h){
+  var by = {};
+  doneDays(h).forEach(function(d){ (h[d].exercises||[]).forEach(function(e){ if (e.w>0 && !e.isFinisher) (by[e.id] = by[e.id] || []).push(topWeightOn(e, d)); }); });
+  return Object.keys(by).filter(function(id){ var a = by[id]; return a.length>=3 && a[a.length-1] > a[0]; }).length;
+}
+function autoDifficulty(h){
+  var done = doneDays(h), wk = {}, cutoff = (function(){ var x = new Date(WEEK_START+"T12:00:00"); x.setDate(x.getDate()-26*7); return localISO(x); })();
+  done.forEach(function(d){ if (d>=cutoff) { var w = weekStartOf(d); wk[w] = (wk[w]||0)+1; } });
+  var cw = Object.keys(wk).filter(function(w){ return wk[w]>=2; }).length, prog = liftsProgressed(h), gap = lastDoneGap(h);
+  var key, why;
+  if (!done.length) return {key:"beginner", why:"New here: start with the basics and build up."};
+  if (cw>=20 && done.length>=60 && prog>=3) { key = "advanced"; why = cw+" consistent weeks, "+done.length+" sessions and "+prog+" lifts progressing."; }
+  else if (cw>=6 || (cw>=4 && prog>=2)) { key = "intermediate"; why = cw+" consistent weeks (2+ sessions)"+(prog?" and "+prog+" lift"+(prog>1?"s":"")+" progressed":"")+"."; }
+  else { key = "beginner"; why = cw+" consistent week"+(cw===1?"":"s")+" so far. Moves up after about 6 (or 4 with lifts progressing)."; }
+  if (gap!==null && gap>=14 && key!=="beginner") { var lower = key==="advanced"?"intermediate":"beginner"; why = gap+" days off, so easing back from "+DIFFICULTY[key].label+"."; key = lower; }
+  return {key:key, why:why};
+}
+function autoGoal(h, stats, cardio){
+  var done = doneDays(h), gap = lastDoneGap(h);
+  if (!done.length) return {key:"muscle", why:"Starting point: balanced muscle-building sessions."};
+  var d14 = (function(){ var x = new Date(TODAY+"T12:00:00"); x.setDate(x.getDate()-14); return localISO(x); })();
+  var recent14 = done.filter(function(d){ return d>=d14 && d!==TODAY; }).length;
+  if (gap!==null && gap>=10) return {key:"active", why:gap+" days since your last session. Easy, finishable sessions to rebuild consistency."};
+  if (recent14<2 && done.length>=3) return {key:"active", why:"Only "+recent14+" session"+(recent14===1?"":"s")+" in 2 weeks. Keeping it light to rebuild consistency."};
+  var past = done.filter(function(d){ return d!==TODAY; });
+  var last3 = past.slice(-3).map(function(d){ return h[d].goalKey; }), last6 = past.slice(-6).map(function(d){ return h[d].goalKey; });
+  var cnt = function(arr, g){ return arr.filter(function(x){ return x===g; }).length; };
+  var cands = [];
+  // stalled lifts (from the last finished session's weighted lifts)
+  var lastEx = past.length ? (h[past[past.length-1]].exercises||[]).filter(function(e){ return e.w>0 && !e.isFinisher; }) : [];
+  var stalled = lastEx.filter(function(e){ return checkPlateau(h, e.id); });
+  if (stalled.length>=2) cands.push({key:"strength", why:stalled.length+" lifts stalled ("+stalled.slice(0,2).map(function(e){return e.name;}).join(", ")+"). Heavier, lower-rep work."});
+  // weight trend over ~4 weeks
+  var d28 = (function(){ var x = new Date(TODAY+"T12:00:00"); x.setDate(x.getDate()-28); return localISO(x); })();
+  var bl = ((stats&&stats.bodyLog)||[]).filter(function(b){ return b.date>=d28; });
+  if (bl.length>=2) { var dw = Math.round((bl[bl.length-1].weight-bl[0].weight)*10)/10;
+    if (dw >= -0.5) cands.push({key:"fat", why:"Weight "+(dw>=0?"+":"")+dw+" lb over 4 weeks (flat or up). Fat-loss conditioning: short rests, higher reps."}); }
+  // cardio / endurance
+  var d7 = (function(){ var x = new Date(TODAY+"T12:00:00"); x.setDate(x.getDate()-7); return localISO(x); })();
+  var cmin = (cardio||[]).filter(function(c){ return c.date>d7; }).reduce(function(s,c){ return s+(parseFloat(c.min)||0); }, 0);
+  if (cmin<60 && !cands.some(function(c){ return c.key==="fat"; })) cands.push({key:"fat", why:"Only "+cmin+" cardio min in the last 7 days. Conditioning focus for endurance."});
+  for (var i=0;i<cands.length;i++) if (cnt(last3, cands[i].key) < 2) return cands[i];
+  // balance across the block: least-used emphasis in the last 6 sessions
+  var rot = ["muscle","strength","fat"].filter(function(g){ return cnt(last3, g) < 2; });
+  if (!rot.length) rot = ["muscle","strength","fat"];
+  rot.sort(function(a,b){ return cnt(last6,a)-cnt(last6,b); });
+  var mix = ["muscle","strength","fat","active"].filter(function(g){ return cnt(last6,g); }).map(function(g){ return cnt(last6,g)+"× "+GOALS[g].label; }).join(", ");
+  return {key:rot[0], why:"Balancing your block"+(mix?" (last sessions: "+mix+")":"")+"."};
+}
+function autoDuration(h, energy, intensityKey){
+  var done = doneDays(h).filter(function(d){ return d!==TODAY && h[d].duration>0; }).slice(-12);
+  var dow = new Date(TODAY+"T12:00:00").getDay(), dn = ["Sundays","Mondays","Tuesdays","Wednesdays","Thursdays","Fridays","Saturdays"][dow];
+  var same = done.filter(function(d){ return new Date(d+"T12:00:00").getDay()===dow; });
+  var m, why;
+  if (same.length>=2) { m = snapDur(median(same.map(function(d){ return h[d].duration; }))); why = "You usually train about "+m+" min on "+dn; }
+  else if (done.length>=3) { m = snapDur(median(done.map(function(d){ return h[d].duration; }))); why = "Your recent sessions run about "+m+" min"; }
+  else { m = 45; why = "Default 45 min: a solid full session"; }
+  var gap = lastDoneGap(h);
+  if (gap!==null && gap>=10 && m>30) { m = 30; why += ", but you're back after "+gap+" days off, so 30 min"; }
+  if (energy && energy<=2) { m = Math.min(m, 30); why += "; low energy, so shorter"; }
+  else if (energy===3 && m>30) { m = stepDur(m,-1); why += "; moderate energy, one step shorter"; }
+  else if (energy===5 && m<90) { m = stepDur(m,1); why += "; high energy, one step longer"; }
+  if (intensityKey==="recovery" && m>30) { m = 30; why += "; recovery day"; }
+  else if (intensityKey==="light" && m>45) { m = stepDur(m,-1); why += "; light intensity"; }
+  return {mins:m, why:why+"."};
+}
+
 // ── TRAINING BLOCKS: consistent main lifts ─────────────────────────────────
 // For each location + session type, the main lifts stay fixed for a ~4-week block so the
 // weights can progress; accessories still rotate. Swaps made during the block are kept.
@@ -2588,7 +2670,51 @@ function GoalOnboarding(p) {
       flexDirection: "column",
       gap: "10px"
     }
-  }, Object.keys(GOALS).map(function (key) {
+  }, React.createElement("button", {
+    id: "pt-onb-auto",
+    onClick: function () {
+      p.onSelect("auto");
+    },
+    style: {
+      width: "100%",
+      display: "flex",
+      alignItems: "center",
+      gap: "16px",
+      background: C.accent + "14",
+      border: "2px solid " + C.accent,
+      borderRadius: "16px",
+      padding: "18px",
+      cursor: "pointer",
+      textAlign: "left",
+      fontFamily: "inherit"
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: "32px"
+    }
+  }, "\uD83E\uDD16"), React.createElement("div", null, React.createElement("div", {
+    style: {
+      fontSize: "16px",
+      fontWeight: "800",
+      color: C.text
+    }
+  }, "Auto ", React.createElement("span", {
+    style: {
+      fontSize: "10px",
+      background: C.accent + "22",
+      color: C.accent,
+      padding: "2px 8px",
+      borderRadius: "20px",
+      fontWeight: "700",
+      marginLeft: "4px"
+    }
+  }, "Recommended")), React.createElement("div", {
+    style: {
+      fontSize: "12px",
+      color: C.muted,
+      marginTop: "3px"
+    }
+  }, "Balances fat loss, strength & muscle, endurance and consistency based on how your training is going."))), Object.keys(GOALS).map(function (key) {
     var g = GOALS[key];
     return React.createElement("button", {
       key: key,
@@ -3231,6 +3357,67 @@ function CardioSheet(p) {
     }
   }, cardioCounts() ? "Counts toward your weekly session goal (change in Stats → Cardio)." : "Not counted toward your weekly goal (change in Stats → Cardio).")));
 }
+function AutoOption(p) {
+  var on = p.current === "auto";
+  return React.createElement("button", {
+    id: p.id,
+    className: "pt-auto-opt",
+    onClick: function () {
+      p.onSelect("auto");
+    },
+    style: {
+      width: "100%",
+      display: "flex",
+      alignItems: "center",
+      gap: "16px",
+      background: on ? C.accent + "18" : C.card,
+      border: "2px solid " + (on ? C.accent : C.border),
+      borderRadius: "16px",
+      padding: "18px",
+      marginBottom: "10px",
+      cursor: "pointer",
+      textAlign: "left",
+      fontFamily: "inherit"
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: "32px"
+    }
+  }, "\uD83E\uDD16"), React.createElement("div", {
+    style: {
+      flex: 1
+    }
+  }, React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: "8px",
+      flexWrap: "wrap"
+    }
+  }, React.createElement("span", {
+    style: {
+      fontWeight: "800",
+      fontSize: "16px",
+      color: on ? C.accent : C.text
+    }
+  }, "Auto \u2192 ", p.label), on && React.createElement("span", {
+    style: {
+      fontSize: "10px",
+      background: C.accent + "22",
+      color: C.accent,
+      padding: "2px 8px",
+      borderRadius: "20px",
+      fontWeight: "700"
+    }
+  }, "Active")), React.createElement("div", {
+    style: {
+      fontSize: "12px",
+      color: C.muted,
+      marginTop: "5px",
+      lineHeight: 1.5
+    }
+  }, p.why)));
+}
 function SettingsScreen(p) {
   var type = p.type;
   var current = p.current;
@@ -3272,7 +3459,13 @@ function SettingsScreen(p) {
         borderRadius: "10px",
         border: "1px solid rgba(232,93,38,0.2)"
       }
-    }, "\u26A1 Changes rebuild your current workout instantly."), Object.keys(DIFFICULTY).map(function (key) {
+    }, "\u26A1 Changes rebuild your current workout instantly."), p.auto && React.createElement(AutoOption, {
+      id: "pt-auto-diff",
+      current: current,
+      onSelect: onSelect,
+      label: DIFFICULTY[p.auto.key].label,
+      why: p.auto.why
+    }), Object.keys(DIFFICULTY).map(function (key) {
       var d = DIFFICULTY[key];
       var isCur = current === key;
       var isAI = ai === key;
@@ -3592,6 +3785,77 @@ function SettingsScreen(p) {
       }, "Target: ", inten.reps, " reps \xB7 ", Math.round(inten.weightMult * 100), "% weight")));
     }));
   }
+  if (type === "duration") {
+    return React.createElement("div", {
+      style: {
+        padding: "52px 24px 80px"
+      }
+    }, React.createElement(BackBtn, {
+      onBack: onBack
+    }), React.createElement("div", {
+      style: {
+        fontSize: "20px",
+        fontWeight: "900",
+        marginBottom: "6px"
+      }
+    }, "Session Duration"), React.createElement("div", {
+      style: {
+        fontSize: "13px",
+        color: C.muted,
+        marginBottom: "20px",
+        lineHeight: 1.5
+      }
+    }, "Sets how many exercises a session gets."), p.auto && React.createElement(AutoOption, {
+      id: "pt-auto-dur",
+      current: current,
+      onSelect: onSelect,
+      label: p.auto.mins + " min",
+      why: p.auto.why
+    }), Object.keys(DURATION_CONFIG).map(function (m) {
+      var dc = DURATION_CONFIG[m],
+        isCur = current === String(m);
+      return React.createElement("button", {
+        key: m,
+        onClick: function () {
+          onSelect(m);
+        },
+        style: {
+          width: "100%",
+          display: "flex",
+          alignItems: "center",
+          gap: "16px",
+          background: isCur ? C.accent + "18" : C.card,
+          border: "2px solid " + (isCur ? C.accent : C.border),
+          borderRadius: "16px",
+          padding: "16px 18px",
+          marginBottom: "10px",
+          cursor: "pointer",
+          textAlign: "left",
+          fontFamily: "inherit"
+        }
+      }, React.createElement("div", {
+        style: {
+          fontSize: "26px"
+        }
+      }, dc.emoji), React.createElement("div", {
+        style: {
+          flex: 1
+        }
+      }, React.createElement("div", {
+        style: {
+          fontWeight: "800",
+          fontSize: "16px",
+          color: isCur ? C.accent : C.text
+        }
+      }, dc.label), React.createElement("div", {
+        style: {
+          fontSize: "12px",
+          color: C.muted,
+          marginTop: "4px"
+        }
+      }, dc.note)));
+    }));
+  }
   if (type === "goal") {
     return React.createElement("div", {
       style: {
@@ -3627,7 +3891,13 @@ function SettingsScreen(p) {
         marginBottom: "20px",
         lineHeight: 1.5
       }
-    }, "Sets the rep ranges, rest periods, and weight targets for every session. Change anytime your focus shifts."), Object.keys(GOALS).map(function (key) {
+    }, "Sets the rep ranges, rest periods, and weight targets for every session. Change anytime your focus shifts."), p.auto && React.createElement(AutoOption, {
+      id: "pt-auto-goal",
+      current: current,
+      onSelect: onSelect,
+      label: GOALS[p.auto.key].label,
+      why: p.auto.why + " Auto balances fat loss, strength/muscle, endurance and consistency."
+    }), Object.keys(GOALS).map(function (key) {
       var g = GOALS[key];
       var isCur = current === key;
       return React.createElement("button", {
@@ -5453,7 +5723,7 @@ function App() {
   var diffKeyS = useState(function () {
     return gs("ig_d3", "beginner");
   });
-  var diffKey = diffKeyS[0];
+  var diffPref = diffKeyS[0];
   var setDiffKey = diffKeyS[1];
   var locKeyS = useState(function () {
     var k = gs("ig_l3", "gym");
@@ -5467,7 +5737,7 @@ function App() {
   var showPickerS = useState(false);
   var showPicker = showPickerS[0];
   var setShowPicker = showPickerS[1];
-  var goal = goalS[0];
+  var goalPref = goalS[0];
   var setGoal = goalS[1];
   var intensityOverrideS = useState(null);
   var intensityOverride = intensityOverrideS[0];
@@ -5480,8 +5750,10 @@ function App() {
   var durationS = useState(function () {
     return gs("ig_dur", 60);
   });
-  var duration = durationS[0];
+  var durPref = durationS[0];
   var setDuration = durationS[1];
+  var autoTickS = useState(0);
+  var setAutoTick = autoTickS[1];
   var notesS = useState("");
   var notes = notesS[0];
   var setNotes = notesS[1];
@@ -5534,6 +5806,16 @@ function App() {
   }).length;
   var intensityKey = intensityOverride || getIntensity(history, energy);
   var intensity = INTENSITY[intensityKey] || INTENSITY.moderate;
+  var autoFlags = getAuto();
+  var diffAuto = autoFlags.diff === true,
+    goalAuto = autoFlags.goal === true,
+    durAuto = autoFlags.dur === true;
+  var autoDiffR = autoDifficulty(history),
+    autoGoalR = autoGoal(history, stats, cardio),
+    autoDurR = autoDuration(history, energy, intensityKey);
+  var diffKey = diffAuto ? autoDiffR.key : diffPref;
+  var goal = goalAuto ? autoGoalR.key : goalPref;
+  var duration = durAuto ? autoDurR.mins : durPref;
   var diff = DIFFICULTY[diffKey];
   var weightLoggedThisWeek = (stats.bodyLog || []).some(function (e) {
     return e.date >= WEEK_START;
@@ -5655,8 +5937,17 @@ function App() {
     }, 600);
   }
   function applyDiff(k) {
-    setDiffKey(k);
-    ss("ig_d3", k);
+    if (k === null || k === "auto") {
+      setAutoFlag("diff", true);
+      setAutoTick(function (x) {
+        return x + 1;
+      });
+      k = autoDiffR.key;
+    } else {
+      setAutoFlag("diff", false);
+      setDiffKey(k);
+      ss("ig_d3", k);
+    }
     if (sessMeta && (workPhase === "workout" || workPhase === "done")) rebuildExercises(k, undefined, undefined);
     setScreen("home");
   }
@@ -5667,10 +5958,31 @@ function App() {
     setScreen("home");
   }
   function applyGoal(k) {
-    setGoal(k);
-    ss("ig_goal", k);
+    if (k === null || k === "auto") {
+      setAutoFlag("goal", true);
+      setAutoTick(function (x) {
+        return x + 1;
+      });
+    } else {
+      setAutoFlag("goal", false);
+      setGoal(k);
+      ss("ig_goal", k);
+    }
     if (sessMeta && (workPhase === "workout" || workPhase === "done")) rebuildExercises(undefined, undefined, undefined);
     setScreen("home");
+  }
+  function applyDur(m) {
+    if (m === null || m === "auto") {
+      setAutoFlag("dur", true);
+      setAutoTick(function (x) {
+        return x + 1;
+      });
+    } else {
+      m = parseInt(m);
+      setAutoFlag("dur", false);
+      setDuration(m);
+      ss("ig_dur", m);
+    }
   }
   function applyIntensity(k) {
     setIntensityOverride(k);
@@ -5704,6 +6016,7 @@ function App() {
     });
   }
   function dropDifficulty() {
+    setAutoFlag("diff", false);
     setDiffKey("beginner");
     ss("ig_d3", "beginner");
   }
@@ -6023,10 +6336,19 @@ function App() {
       ss("ig_gender", k);
     }
   });
-  if (gs("ig_goal", null) === null) return React.createElement(GoalOnboarding, {
+  if (gs("ig_goal", null) === null && !gs("ig_goal_seen", false)) return React.createElement(GoalOnboarding, {
     onSelect: function (k) {
-      setGoal(k);
-      ss("ig_goal", k);
+      ss("ig_goal_seen", true);
+      if (k === "auto") {
+        setAutoFlag("goal", true);
+        setAutoTick(function (x) {
+          return x + 1;
+        });
+      } else {
+        setAutoFlag("goal", false);
+        setGoal(k);
+        ss("ig_goal", k);
+      }
     }
   });
   if (screen !== "home") {
@@ -6094,7 +6416,7 @@ function App() {
           fontWeight: "900",
           marginBottom: "16px"
         }
-      }, "Settings"), row("pt-set-loc", "Location", LOCATIONS[locKey].emoji + " " + LOCATIONS[locKey].label, null, "location"), row("pt-set-intensity", "Intensity", intensity.emoji + " " + intensity.label, intensity.color, "intensity"), row("pt-set-diff", "Difficulty", diff.emoji + " " + diff.label, diff.color, "difficulty"), row("pt-set-goal", "Goal", GOALS[goal] ? GOALS[goal].emoji + " " + GOALS[goal].label : "Choose", GOALS[goal] ? GOALS[goal].color : null, "goal"), React.createElement("div", {
+      }, "Settings"), row("pt-set-loc", "Location", LOCATIONS[locKey].emoji + " " + LOCATIONS[locKey].label, null, "location"), row("pt-set-intensity", "Intensity", intensity.emoji + " " + intensity.label, intensity.color, "intensity"), row("pt-set-diff", "Difficulty", diff.emoji + " " + diff.label + (diffAuto ? " · auto" : ""), diff.color, "difficulty"), row("pt-set-goal", "Goal", (GOALS[goal] ? GOALS[goal].emoji + " " + GOALS[goal].label : "Choose") + (goalAuto ? " · auto" : ""), GOALS[goal] ? GOALS[goal].color : null, "goal"), row("pt-set-dur", "Duration", "⏱ " + duration + " min" + (durAuto ? " · auto" : ""), null, "duration"), React.createElement("div", {
         style: Object.assign({}, rowS, {
           cursor: "default",
           display: "block"
@@ -6141,11 +6463,24 @@ function App() {
         }, n);
       }))), row("pt-set-profile", "Profile & data", (GENDER_CONFIG[gender] ? GENDER_CONFIG[gender].emoji + " " : "") + "Backup · Export", null, "gender")));
     }
+    if (screen === "duration") return React.createElement("div", {
+      style: bg
+    }, React.createElement(SettingsScreen, {
+      type: "duration",
+      current: durAuto ? "auto" : String(duration),
+      auto: autoDurR,
+      onSelect: function (v) {
+        applyDur(v);
+        setScreen("home");
+      },
+      onBack: screenProps.onBack
+    }));
     if (screen === "difficulty") return React.createElement("div", {
       style: bg
     }, React.createElement(SettingsScreen, {
       type: "difficulty",
-      current: diffKey,
+      current: diffAuto ? "auto" : diffKey,
+      auto: autoDiffR,
       totalDone: totalDone,
       onSelect: applyDiff,
       onBack: screenProps.onBack
@@ -6179,7 +6514,8 @@ function App() {
       style: bg
     }, React.createElement(SettingsScreen, {
       type: "goal",
-      current: goal,
+      current: goalAuto ? "auto" : goal,
+      auto: autoGoalR,
       onSelect: applyGoal,
       onBack: screenProps.onBack
     }));
@@ -7165,19 +7501,19 @@ function App() {
       label: LOCATIONS[locKey].emoji + " " + LOCATIONS[locKey].label
     }, {
       k: "dur",
-      label: "⏱ " + dc.label
+      label: "⏱ " + dc.label + (durAuto ? " · auto" : "")
     }, {
       k: "int",
       label: intensity.emoji + " " + intensity.label + (intensityOverride ? "" : " · auto"),
       color: intensity.color
     }, {
       k: "diff",
-      label: diff.emoji + " " + diff.label,
+      label: diff.emoji + " " + diff.label + (diffAuto ? " · auto" : ""),
       color: diff.color
     }];
     if (gl) items.push({
       k: "goal",
-      label: gl.emoji + " " + gl.label,
+      label: gl.emoji + " " + gl.label + (goalAuto ? " · auto" : ""),
       color: gl.color
     });
     var opts = {
@@ -7195,19 +7531,19 @@ function App() {
       },
       dur: {
         title: "Duration",
-        cur: String(duration),
-        list: Object.keys(DURATION_CONFIG).map(function (m) {
+        cur: durAuto ? "auto" : String(duration),
+        list: [{
+          v: "auto",
+          label: "🤖 Auto → " + autoDurR.mins + " min",
+          sub: autoDurR.why
+        }].concat(Object.keys(DURATION_CONFIG).map(function (m) {
           return {
             v: String(m),
             label: DURATION_CONFIG[m].emoji + " " + DURATION_CONFIG[m].label,
             sub: DURATION_CONFIG[m].note
           };
-        }),
-        pick: function (v) {
-          var m = parseInt(v);
-          setDuration(m);
-          ss("ig_dur", m);
-        }
+        })),
+        pick: applyDur
       },
       "int": {
         title: "Intensity",
@@ -7230,27 +7566,35 @@ function App() {
       },
       diff: {
         title: "Difficulty",
-        cur: diffKey,
-        list: Object.keys(DIFFICULTY).map(function (k) {
+        cur: diffAuto ? "auto" : diffKey,
+        list: [{
+          v: "auto",
+          label: "🤖 Auto → " + DIFFICULTY[autoDiffR.key].label,
+          sub: autoDiffR.why
+        }].concat(Object.keys(DIFFICULTY).map(function (k) {
           return {
             v: k,
             label: DIFFICULTY[k].emoji + " " + DIFFICULTY[k].label,
             color: DIFFICULTY[k].color
           };
-        }),
+        })),
         pick: applyDiff
       },
       goal: {
         title: "Goal",
-        cur: goal,
-        list: Object.keys(GOALS).map(function (k) {
+        cur: goalAuto ? "auto" : goal,
+        list: [{
+          v: "auto",
+          label: "🤖 Auto → " + GOALS[autoGoalR.key].label,
+          sub: autoGoalR.why
+        }].concat(Object.keys(GOALS).map(function (k) {
           return {
             v: k,
             label: GOALS[k].emoji + " " + GOALS[k].label,
             sub: GOALS[k].restNote,
             color: GOALS[k].color
           };
-        }),
+        })),
         pick: applyGoal
       }
     };
@@ -7753,15 +8097,30 @@ function App() {
       gap: "6px",
       flexWrap: "wrap"
     }
-  }, Object.keys(DURATION_CONFIG).map(function (mins) {
+  }, React.createElement("button", {
+    key: "auto",
+    className: "pt-dur-auto",
+    onClick: function () {
+      applyDur("auto");
+    },
+    style: {
+      padding: "7px 12px",
+      borderRadius: "20px",
+      border: "2px solid " + (durAuto ? C.accent : C.border),
+      background: durAuto ? C.accent + "18" : "transparent",
+      cursor: "pointer",
+      fontFamily: "inherit",
+      fontSize: "11px",
+      fontWeight: "700",
+      color: durAuto ? C.accent : C.muted
+    }
+  }, "\uD83E\uDD16 Auto", durAuto ? " · " + duration + " min" : ""), Object.keys(DURATION_CONFIG).map(function (mins) {
     var dc = DURATION_CONFIG[mins];
-    var isSelected = duration === parseInt(mins);
+    var isSelected = !durAuto && duration === parseInt(mins);
     return React.createElement("button", {
       key: mins,
       onClick: function () {
-        var m = parseInt(mins);
-        setDuration(m);
-        ss("ig_dur", m);
+        applyDur(mins);
       },
       style: {
         padding: "7px 12px",
@@ -7781,7 +8140,7 @@ function App() {
       color: C.muted,
       marginTop: "8px"
     }
-  }, (DURATION_CONFIG[duration] || DURATION_CONFIG[60]).note)), getTopSkipped().length > 0 && React.createElement("div", {
+  }, durAuto ? "🤖 " + autoDurR.why : (DURATION_CONFIG[duration] || DURATION_CONFIG[60]).note)), getTopSkipped().length > 0 && React.createElement("div", {
     style: {
       fontSize: "11px",
       color: C.muted,

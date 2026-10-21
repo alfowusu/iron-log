@@ -17,6 +17,11 @@ Personal Trainer (formerly Iron Log) is a mobile-first training app served as a 
   - **Hard** → hold the weight.
   - Missed reps → hold. Missed and Hard, or missed two sessions in a row → 10% deload.
   - Bodyweight moves rated Easy **level up** to a harder version next time (incline → push-up → decline → archer; squat → split squat → Bulgarian → assisted pistol; and so on). You can tap "go back" to undo.
+- **🤖 Auto difficulty, goal and duration:** rule-based, with a one-line reason in each picker.
+  - **Difficulty:** goes up with consistent weeks and lift progress, and drops a level after 14+ days off.
+  - **Goal:** looks after consistency first, then stalled lifts (strength), a flat or rising weight trend or low cardio (fat-loss conditioning), and otherwise balances emphasis across the block.
+  - **Duration:** based on your typical session length for that weekday, returns after a break, energy and intensity.
+  - New users start on Auto. Existing users keep their choices until they pick Auto. Stored in `ig_auto`.
 - **Cardio log:** quick entry for run, walk, bike, row or other: duration, optional distance (mi) and effort. Entries show in the Log, Stats → Cardio has weekly minutes with a chart, and cardio counts toward the weekly goal (one per day, toggle in Stats → Cardio; on by default).
 - **Body measurements:** optional waist, chest, hips, arms and thighs (in) under Stats → Body, with trend charts. The weekly weigh-in banner reminds you about them too, once you've started tracking.
 - **Cloud backup (optional):** automatic backup to the private repo `alfowusu/trainer-data`. See below.
