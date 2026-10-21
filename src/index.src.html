@@ -2293,6 +2293,8 @@ function App() {
   var showTips=showTipsS[0]; var setShowTips=showTipsS[1];
   var suggestedS = useState(function(){ return autoSession(gs("ig_h6",{}), null, gs("ig_gender",null)); });
   var suggested=suggestedS[0];
+  var previewPickS = useState(null);
+  var previewPick=previewPickS[0]; var setPreviewPick=previewPickS[1];
   var blockTickS = useState(0);
   var blockTick=blockTickS[0]; var setBlockTick=blockTickS[1];
   var goalEditS = useState(false);
@@ -2812,7 +2814,52 @@ function App() {
               <div id="pt-start-card" style={{background:"linear-gradient(135deg,#2a1408,#1a0d06)",border:"1px solid "+C.accent+"66",borderRadius:"18px",padding:"18px",marginBottom:"14px"}}>
                 <div style={{fontSize:"10px",letterSpacing:"0.14em",textTransform:"uppercase",color:C.muted,fontFamily:"monospace"}}>Suggested for today</div>
                 <div style={{fontSize:"20px",fontWeight:"900",color:C.text,marginTop:"4px"}}>{suggested.emoji} {suggested.label}</div>
-                <div id="pt-start-preview" style={{fontSize:"12px",color:C.muted,marginTop:"4px",lineHeight:1.5}}>{LOCATIONS[locKey].emoji} {LOCATIONS[locKey].label} · {(DURATION_CONFIG[duration]||DURATION_CONFIG[60]).label} · {intensity.label} · {diff.label}</div>
+                {(function(){
+                  // Tappable preview chips: each opens an inline picker with all options (same effect as the Settings screens).
+                  var dc = DURATION_CONFIG[duration]||DURATION_CONFIG[60], gl = GOALS[goal];
+                  var items = [
+                    {k:"loc",  label:LOCATIONS[locKey].emoji+" "+LOCATIONS[locKey].label},
+                    {k:"dur",  label:"⏱ "+dc.label},
+                    {k:"int",  label:intensity.emoji+" "+intensity.label+(intensityOverride?"":" · auto"), color:intensity.color},
+                    {k:"diff", label:diff.emoji+" "+diff.label, color:diff.color}
+                  ];
+                  if (gl) items.push({k:"goal", label:gl.emoji+" "+gl.label, color:gl.color});
+                  var opts = {
+                    loc:  {title:"Location", cur:locKey, list:Object.keys(LOCATIONS).map(function(k){ return {v:k, label:LOCATIONS[k].emoji+" "+LOCATIONS[k].label, sub:k==="home"?"Bodyweight only":"Full equipment"}; }), pick:applyLoc},
+                    dur:  {title:"Duration", cur:String(duration), list:Object.keys(DURATION_CONFIG).map(function(m){ return {v:String(m), label:DURATION_CONFIG[m].emoji+" "+DURATION_CONFIG[m].label, sub:DURATION_CONFIG[m].note}; }), pick:function(v){ var m=parseInt(v); setDuration(m); ss("ig_dur",m); }},
+                    "int":{title:"Intensity", cur:intensityOverride||"auto", list:[{v:"auto", label:"🤖 Auto", sub:"Set from your training load & energy (now "+(INTENSITY[getIntensity(history, energy)]||INTENSITY.moderate).label+")"}].concat(Object.keys(INTENSITY).map(function(k){ return {v:k, label:INTENSITY[k].emoji+" "+INTENSITY[k].label, sub:INTENSITY[k].note, color:INTENSITY[k].color}; })), pick:function(v){ applyIntensity(v==="auto"?null:v); }},
+                    diff: {title:"Difficulty", cur:diffKey, list:Object.keys(DIFFICULTY).map(function(k){ return {v:k, label:DIFFICULTY[k].emoji+" "+DIFFICULTY[k].label, color:DIFFICULTY[k].color}; }), pick:applyDiff},
+                    goal: {title:"Goal", cur:goal, list:Object.keys(GOALS).map(function(k){ return {v:k, label:GOALS[k].emoji+" "+GOALS[k].label, sub:GOALS[k].restNote, color:GOALS[k].color}; }), pick:applyGoal}
+                  };
+                  var open = previewPick && opts[previewPick] ? opts[previewPick] : null;
+                  return (
+                    <div>
+                      <div id="pt-start-preview" style={{display:"flex",flexWrap:"wrap",gap:"6px",marginTop:"8px"}}>
+                        {items.map(function(it){ var on = previewPick===it.k; return (
+                          <button key={it.k} className="pt-pv-chip" data-k={it.k} aria-haspopup="true" aria-expanded={on} onClick={function(){ setPreviewPick(on?null:it.k); }}
+                            style={{display:"inline-flex",alignItems:"center",gap:"4px",padding:"6px 10px",borderRadius:"20px",border:"1px solid "+(on?C.accent:(it.color?it.color+"55":"#4a3a30")),background:on?C.accent+"22":"rgba(255,255,255,0.05)",color:on?C.accent:(it.color||C.text),fontSize:"12px",fontWeight:"700",cursor:"pointer",fontFamily:"inherit"}}>
+                            {it.label}<span style={{fontSize:"10px",opacity:0.75,transform:on?"rotate(180deg)":"none"}}>▾</span>
+                          </button>); })}
+                      </div>
+                      {open && (
+                        <div id="pt-pv-picker" ref={function(el){ if (el && !el.__shown) { el.__shown = 1; try { el.scrollIntoView({block:"nearest", behavior:"smooth"}); } catch(e){} } }} style={{marginTop:"10px",background:"#140d09",border:"1px solid "+C.border,borderRadius:"14px",padding:"10px"}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px"}}>
+                            <span style={{fontSize:"10px",letterSpacing:"0.12em",textTransform:"uppercase",color:C.muted,fontFamily:"monospace"}}>{open.title}</span>
+                            <button onClick={function(){setPreviewPick(null);}} aria-label="Close" style={{background:"transparent",border:"none",color:C.muted,fontSize:"14px",cursor:"pointer"}}>✕</button>
+                          </div>
+                          <div style={{display:"flex",flexDirection:"column",gap:"6px"}}>
+                            {open.list.map(function(o){ var cur = String(open.cur)===String(o.v); return (
+                              <button key={o.v} className={"pt-pv-opt"+(cur?" pt-pv-cur":"")} data-v={o.v} aria-pressed={cur} onClick={function(){ open.pick(o.v); setPreviewPick(null); }}
+                                style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:"8px",textAlign:"left",padding:"10px 12px",borderRadius:"10px",border:"2px solid "+(cur?(o.color||C.accent):C.border),background:cur?(o.color||C.accent)+"1f":"transparent",cursor:"pointer",fontFamily:"inherit"}}>
+                                <span><span style={{fontSize:"13px",fontWeight:"800",color:cur?(o.color||C.accent):C.text}}>{o.label}</span>{o.sub && <span style={{display:"block",fontSize:"11px",color:C.muted,marginTop:"2px"}}>{o.sub}</span>}</span>
+                                {cur && <span style={{fontSize:"12px",fontWeight:"800",color:o.color||C.accent}}>✓</span>}
+                              </button>); })}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
                 <button id="pt-start-today" onClick={function(){startSess(suggested);}} style={{width:"100%",marginTop:"14px",padding:"17px",borderRadius:"14px",border:"none",background:C.accent,color:"#fff",fontWeight:"900",fontSize:"16px",cursor:"pointer",fontFamily:"inherit"}}>▶ Start today's session</button>
                 <button id="pt-start-other" onClick={function(){setWorkPhase("pick");}} style={{width:"100%",marginTop:"8px",padding:"8px",border:"none",background:"transparent",color:C.accent,fontWeight:"700",fontSize:"12px",cursor:"pointer",fontFamily:"inherit"}}>Choose a different session or duration →</button>
               </div>
